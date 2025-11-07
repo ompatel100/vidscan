@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import argparse
+import concurrent.futures
 from typing import Dict, Any
 
 # --- USER CONFIGURATION ---
@@ -34,6 +35,50 @@ def format_seconds_hms(seconds: float) -> str:
     secs = seconds % 60
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
+def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int) -> Dict[str, Any]:
+    tasks = []
+    print("Finding video files...")
+    for dirpath, dirs, filenames in os.walk(root_folder):
+        dirs[:] = [d for d in dirs if d not in excluded_set]
+        
+        for filename in filenames:
+            if os.path.splitext(filename)[1].lower() in VIDEO_EXTENSIONS:
+                tasks.append(os.path.join(dirpath, filename))
+
+    if not tasks:
+        return {}
+
+    print(f"Found {len(tasks)} video files. Processing with {num_workers} workers...")
+    
+    folder_data: Dict[str, Any] = {}
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        future_to_path = {executor.submit(get_video_duration, path): path for path in tasks}
+        
+        for i, future in enumerate(concurrent.futures.as_completed(future_to_path)):
+            path = future_to_path[future]
+            duration = future.result()
+            
+            progress = (i + 1) / len(tasks)
+            bar = '█' * int(progress * 40)
+            print(f'\rProgress: [{bar:<40}] {int(progress*100)}%', end="")
+
+            if duration > 0:
+                dirpath = os.path.dirname(path)
+                filename = os.path.basename(path)
+                
+                if dirpath not in folder_data:
+                    folder_data[dirpath] = {'files': []}
+                
+                folder_data[dirpath]['files'].append({'name': filename, 'duration': duration})
+
+    for info in folder_data.values():
+        info['total_seconds'] = sum(f['duration'] for f in info['files'])
+        info['video_count'] = len(info['files'])
+    
+    print("\nProcessing complete.")
+    return folder_data
+
 def main():
     parser = argparse.ArgumentParser(
         description="A script to calculate video durations across nested directories."
@@ -41,6 +86,12 @@ def main():
     parser.add_argument(
         "folder_path",
         help="The full path to the main folder you want to scan."
+    )
+    parser.add_argument(
+        "-w", "--workers",
+        type=int,
+        default=min(32, (os.cpu_count() or 1) + 4),
+        help="Number of parallel threads to use.\n(default: dynamically calculated for your system)"
     )
     parser.add_argument(
         "-e", "--exclude",
@@ -67,24 +118,7 @@ def main():
         print("ffprobe not found in system PATH. Using moviepy (slower).")
         print("For faster performance, install FFmpeg and add it to your system's PATH.")
 
-    folder_durations: Dict[str, Any] = {}
-
-    for dirpath, dirs, filenames in os.walk(root_folder):
-        dirs[:] = [d for d in dirs if d not in excluded_set]
-
-        current_folder_seconds = 0.0
-        video_count_in_folder = 0
-        
-        for filename in filenames:
-            if os.path.splitext(filename)[1].lower() in VIDEO_EXTENSIONS:
-                video_count_in_folder += 1
-                full_path = os.path.join(dirpath, filename)
-                duration = get_video_duration(full_path)
-                
-                current_folder_seconds += duration
-        
-        if video_count_in_folder > 0:
-            folder_durations[dirpath] = (current_folder_seconds, video_count_in_folder)
+    folder_durations = scan_videos_concurrently(root_folder, excluded_set, args.workers)
 
     if not folder_durations:
         print(f"\nNo video files found with the configured extensions: {', '.join(sorted(list(VIDEO_EXTENSIONS)))}")
@@ -95,10 +129,13 @@ def main():
     grand_total_seconds = 0.0
     grand_total_videos = 0
 
-    for folder, (total_seconds, video_count) in sorted(folder_durations.items()):
-        folder_name = os.path.basename(folder)
+    for folder_path, info in sorted(folder_durations.items()):
+        total_seconds = info['total_seconds']
+        video_count = info['video_count']
+        
+        folder_name = os.path.basename(folder_path)
         if not folder_name:
-            folder_name = os.path.basename(os.path.normpath(folder))
+            folder_name = os.path.basename(os.path.normpath(folder_path))
 
         report_lines.append(f"Folder: {folder_name}")
         report_lines.append(f"  -> Videos: {video_count} | Duration: {format_seconds_hms(total_seconds)}")
