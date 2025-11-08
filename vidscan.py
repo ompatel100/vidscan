@@ -81,7 +81,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
 
 def main():
     parser = argparse.ArgumentParser(
-        description="A script to calculate video durations across nested directories."
+        description="A high performance tool to calculate total video duration across nested directories."
     )
     parser.add_argument(
         "folder_path",
@@ -115,8 +115,18 @@ def main():
     if FFPROBE_PATH:
         print("Using ffprobe for scanning.")
     else:
-        print("ffprobe not found in system PATH. Using moviepy (slower).")
-        print("For faster performance, install FFmpeg and add it to your system's PATH.")
+        print("ffprobe not found in system PATH. Checking for moviepy...")
+        try:
+            from moviepy import VideoFileClip
+            print("Using moviepy (slower).")
+        except ImportError:
+            print("\n--- ERROR: ffprobe or moviepy not found ---")
+            print("This script requires either FFmpeg or the moviepy library to work.")
+            print("\nOption 1 (Recommended for best performance):")
+            print("  Install FFmpeg from https://ffmpeg.org/download.html and add it to your system's PATH.")
+            print("\nOption 2 (Easy to setup but slower):")
+            print("  Install moviepy: pip install moviepy~=2.2")
+            return
 
     folder_durations = scan_videos_concurrently(root_folder, excluded_set, args.workers)
 
