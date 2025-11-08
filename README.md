@@ -1,49 +1,118 @@
 # VidScan
 
-A Python script to scan nested folders of video files, calculate the total duration for each folder, and generate text report.
+A high performance command line tool to analyze video libraries, calculate total durations across nested directories and generate text reports.
 
 ---
 
 ## Features
 
-- Recursively scans all nested subfolders.
-- Calculates the total duration and video count for each folder.
-- Excludes provided folders.
-- Generates a text report saved in the scanned directory.
+- **High Performance:** Uses concurrency to scan large folders much faster by processing multiple video files at the same time.
+- **CLI:** You can change everything through command line. Give folder path, folders to exclude, number of parallel threads in the CLI itself.
+- **Recursive Scanning:** Automatically scans all subfolders.
+- **Text Report:** Generates a clean, readable text file that contains the total duration and video count for each folder, and the total duration for the root folder.
 
 ---
 
-## Prerequisites
+## Installation
 
-This script requires these two to be installed on your system.
+This tool can read video durations in two different ways. You only need to follow **one** of the two options below.
 
-1. **Python (3.8+):** You can download it from [python.org](https://www.python.org/downloads/).
-2. **FFmpeg:** This script **requires FFmpeg** to be installed and accessible from your system's PATH. FFmpeg is used to read the video file metadata.
-   - You can download FFmpeg from the [official website](https://ffmpeg.org/download.html).
-   - After downloading, you must add the location of the `bin` folder (which contains `ffprobe.exe`) to your system's PATH environment variable.
+- **For the fastest performance,** choose **Option 1**. This is the recommended method, it requires you to be comfortable installing FFmpeg and adding it to your system's PATH.
+- **For the simplest setup,** choose **Option 2**. This method is a good alternative if you only plan to scan smaller folders and prefer a single `pip install` command.
+
+The script will **automatically detect** which method you have installed. If it finds `ffprobe` (Option 1), it will use it. If not, it will look for `moviepy` (Option 2).
 
 ---
 
-## Installation & Configuration
+### **Option 1: Using ffprobe (Recommended)**
 
-1. Download `vidscan.py`.
-2. Open it in a text editor.
-3. At the top of the file, set the following 3:
-   - `ROOT_FOLDER`: Set this to the full path of the directory you want to scan.
-   - `EXCLUDED_FOLDERS`: Add the names of any folders you want to exclude in the scan.
-   - `VIDEO_EXTENSIONS`: Add or remove the file extensions you want the script to scan.
+1. **Install Python (3.8+)** from [python.org](https://www.python.org/downloads/).
+2. **Install FFmpeg** from the [official website](https://ffmpeg.org/download.html).
+3. **Add the FFmpeg `bin` folder** (which contains `ffprobe.exe`) to your **system's PATH**.
+
+You do not need to install any Python packages from `requirements.txt` if you use this method.
+
+### **Option 2: Using moviepy (Slower)**
+
+1. **Install Python (3.8+)** from [python.org](https://www.python.org/downloads/).
+2. **Create a Virtual Environment (Optional but Recommended):**
+
+    ```bash
+    cd /Path/To/Project/Folder
+    python -m venv venv
+    ./venv/Scripts/activate
+    ```
+
+3. **Install Dependencies:**
+    Run this command to install `moviepy`:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
 
 ---
 
 ## Usage
 
-Run this in terminal from the location where the script is saved:
+You can run the script from your terminal. The only required argument is the path to the folder you want to scan.
 
-   ```bash
-   python vidscan.py
-   ```
+### Default Scan
 
-The script will then scan the `ROOT_FOLDER`, upon completion, will save a report file `<FOLDER_NAME> - Video Duration.txt` inside that same folder.
+To scan a folder, simply provide the full path. If the path contains spaces, make sure to enclose it in quotes.
+
+```bash
+python vidscan.py "D:\Path\To\Your\Folder"
+```
+
+The script will scan the folder, using the defaults, and save the report inside that same directory.
+
+### Excluding Folders
+
+Use the `-e` or `--exclude` flag to ignore one or more folders.
+
+```bash
+python vidscan.py "D:\Path\To\Your\Folder" -e "Folder 1" "Folder 2"
+```
+
+This will skip folders "Folder 1", "Folder 2"
+
+### Setting Worker Threads
+
+Manually set the number of parallel threads with the `--workers` (or `-w`) flag.
+
+```bash
+python vidscan.py "D:\Path\To\Your\Folder" -w 16
+```
+
+Run the scan using a maximum of 16 threads
+
+### Help
+
+You can see the full list of options by running the script with the `-h` or `--help` flag:
+
+```bash
+python vidscan.py --help
+```
+
+This will display the following:
+
+```
+usage: vidscan.py [-h] [-w WORKERS] [-e EXCLUDE [EXCLUDE ...]] folder_path
+
+A script to calculate video durations across nested directories.
+
+positional arguments:
+  folder_path           The full path to the main folder you want to scan.
+
+options:
+  -h, --help            show this help message and exit
+  -w, --workers WORKERS
+                        Number of parallel threads to use. (default:
+                        dynamically calculated for your system)
+  -e, --exclude EXCLUDE [EXCLUDE ...]
+                        A space separated list of folder names to exclude
+                        from the scan (case sensitive).
+```
 
 ---
 
