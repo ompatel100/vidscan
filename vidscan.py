@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import argparse
 import concurrent.futures
-from typing import Dict, Any
+from typing import Dict, List, Any
 
 # --- USER CONFIGURATION ---
 # File extensions that you want to scan
@@ -79,6 +79,73 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
     print("\nProcessing complete.")
     return folder_data
 
+def generate_summary_report(data: Dict[str, Any]) -> List[str]:
+    lines = [
+        "Video Duration (Summary)", 
+        "=" * 40,
+        ""
+    ]
+    
+    grand_total_seconds = 0.0
+    grand_total_videos = 0
+
+    for folder_path, info in sorted(data.items()):
+        folder_name = os.path.basename(folder_path)
+        if not folder_name:
+            folder_name = os.path.basename(os.path.normpath(folder_path))
+
+        lines.append(f"Folder: {folder_name}")
+        lines.append(f"  -> Videos: {info['video_count']} | Duration: {format_seconds_hms(info['total_seconds'])}")
+        lines.append("-" * 40)
+        
+        grand_total_seconds += info['total_seconds']
+        grand_total_videos += info['video_count']
+    
+    lines.extend([
+        "\nTOTALS",
+        f"  -> Total Folders: {len(data)}",
+        f"  -> Total Videos: {grand_total_videos}",
+        f"  -> Total Duration: {format_seconds_hms(grand_total_seconds)}",
+        "=" * 40
+    ])
+    return lines
+
+def generate_detailed_report(data: Dict[str, Any]) -> List[str]:
+    lines = [
+        "Video Duration (Detailed)", 
+        "=" * 60,
+        ""
+    ]
+    
+    grand_total_seconds = 0.0
+    grand_total_videos = 0
+
+    for folder_path, info in sorted(data.items()):
+        folder_name = os.path.basename(folder_path)
+        if not folder_name:
+            folder_name = os.path.basename(os.path.normpath(folder_path))
+
+        lines.append(f"Folder: {folder_name}")
+        lines.append(f"  [Subtotal: {format_seconds_hms(info['total_seconds'])} | {info['video_count']} videos]")
+        
+        sorted_files = sorted(info['files'], key=lambda x: x['name'])
+        for file_info in sorted_files:
+            lines.append(f"    - {file_info['name']} ({format_seconds_hms(file_info['duration'])})")
+            
+        lines.append("-" * 60)
+        
+        grand_total_seconds += info['total_seconds']
+        grand_total_videos += info['video_count']
+    
+    lines.extend([
+        "\nGRAND TOTAL",
+        f"  -> Total Folders: {len(data)}",
+        f"  -> Total Videos: {grand_total_videos}",
+        f"  -> Total Duration: {format_seconds_hms(grand_total_seconds)}",
+        "=" * 60
+    ])
+    return lines
+
 def main():
     parser = argparse.ArgumentParser(
         description="A high performance tool to calculate total video duration across nested directories."
@@ -98,6 +165,12 @@ def main():
         nargs='+',
         default=[],
         help="A space separated list of folder names to exclude from the scan (case sensitive)."
+    )
+    parser.add_argument(
+        "-t", "--template", 
+        choices=['summary', 'detailed'], 
+        default='summary',
+        help="The output template for the report (default: summary)."
     )
     args = parser.parse_args()
 
@@ -135,30 +208,10 @@ def main():
         print("To include other formats, please add them to the VIDEO_EXTENSIONS at the top of the script.")
         return
 
-    report_lines = ["Video Duration", "=" * 40]
-    grand_total_seconds = 0.0
-    grand_total_videos = 0
-
-    for folder_path, info in sorted(folder_durations.items()):
-        total_seconds = info['total_seconds']
-        video_count = info['video_count']
-        
-        folder_name = os.path.basename(folder_path)
-        if not folder_name:
-            folder_name = os.path.basename(os.path.normpath(folder_path))
-
-        report_lines.append(f"Folder: {folder_name}")
-        report_lines.append(f"  -> Videos: {video_count} | Duration: {format_seconds_hms(total_seconds)}")
-        report_lines.append("-" * 40)
-        
-        grand_total_seconds += total_seconds
-        grand_total_videos += video_count
-    
-    report_lines.append("TOTALS")
-    report_lines.append(f"  -> Total Folders: {len(folder_durations)}")
-    report_lines.append(f"  -> Total Videos: {grand_total_videos}")
-    report_lines.append(f"  -> Total Duration: {format_seconds_hms(grand_total_seconds)}")
-    report_lines.append("=" * 40)
+    if args.template == 'detailed':
+        report_lines = generate_detailed_report(folder_durations)
+    else:
+        report_lines = generate_summary_report(folder_durations)
 
     folder_name = os.path.basename(os.path.normpath(root_folder))
     output_filename = f"{folder_name} - Video Duration.txt"
