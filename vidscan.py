@@ -3,6 +3,9 @@ import shutil
 import subprocess
 import argparse
 import concurrent.futures
+import csv
+import json
+import datetime
 from typing import Dict, List, Any
 
 # --- USER CONFIGURATION ---
@@ -146,6 +149,42 @@ def generate_detailed_report(data: Dict[str, Any]) -> List[str]:
     ])
     return lines
 
+def write_csv_report(data: Dict[str, Any], output_path: str, root_folder: str):
+    with open(output_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Folder Path', 'Relative Path', 'File Name', 'Duration (Seconds)', 'Duration (Formatted)'])
+        
+        for folder_path, info in sorted(data.items()):
+            relative_path = os.path.relpath(folder_path, root_folder)
+            sorted_files = sorted(info['files'], key=lambda x: x['name'])
+            
+            for file_info in sorted_files:
+                writer.writerow([
+                    folder_path,
+                    relative_path,
+                    file_info['name'],
+                    f"{file_info['duration']:.2f}",
+                    format_seconds_hms(file_info['duration'])
+                ])
+
+def write_json_report(data: Dict[str, Any], output_path: str):
+    total_seconds = sum(info['total_seconds'] for info in data.values())
+    total_videos = sum(len(info['files']) for info in data.values())
+
+    report_structure = {
+        "summary": {
+            "total_folders": len(data),
+            "total_videos": total_videos,
+            "total_duration_seconds": round(total_seconds, 2),
+            "total_duration_formatted": format_seconds_hms(total_seconds),
+            "generated_at": datetime.datetime.now().isoformat()
+        },
+        "data": data
+    }
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(report_structure, f, indent=4)
+
 def main():
     parser = argparse.ArgumentParser(
         description="A high performance tool to calculate total video duration across nested directories."
@@ -155,22 +194,27 @@ def main():
         help="The full path to the main folder you want to scan."
     )
     parser.add_argument(
-        "-w", "--workers",
-        type=int,
-        default=min(32, (os.cpu_count() or 1) + 4),
-        help="Number of parallel threads to use.\n(default: dynamically calculated for your system)"
-    )
-    parser.add_argument(
         "-e", "--exclude",
         nargs='+',
         default=[],
         help="A space separated list of folder names to exclude from the scan (case sensitive)."
     )
     parser.add_argument(
+        "-w", "--workers",
+        type=int,
+        default=min(32, (os.cpu_count() or 1) + 4),
+        help="Number of parallel threads to use.\n(default: dynamically calculated for your system)"
+    )
+    parser.add_argument(
+        "-f", "--format",
+        choices=['txt', 'csv', 'json'],
+        default='txt',
+        help="The output format for the report (default: txt).")
+    parser.add_argument(
         "-t", "--template", 
         choices=['summary', 'detailed'], 
         default='summary',
-        help="The output template for the report (default: summary)."
+        help="The output template for the text report (default: summary)."
     )
     args = parser.parse_args()
 
@@ -214,13 +258,28 @@ def main():
         report_lines = generate_summary_report(folder_durations)
 
     folder_name = os.path.basename(os.path.normpath(root_folder))
-    output_filename = f"{folder_name} - Video Duration.txt"
+    output_filename = f"{folder_name} - Video Duration.{args.format}"
     output_path = os.path.join(root_folder, output_filename)
     
     try:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write("\n".join(report_lines))
-        print(f"\nSuccess! Text file saved to:\n{output_path}")
+        if args.format == 'csv':
+            write_csv_report(folder_durations, output_path, root_folder)
+            print(f"\nSuccess! CSV file saved to:\n{output_path}")
+            
+        elif args.format == 'json':
+            write_json_report(folder_durations, output_path)
+            print(f"\nSuccess! JSON file saved to:\n{output_path}")
+            
+        else:
+            if args.template == 'detailed':
+                report_lines = generate_detailed_report(folder_durations)
+            else:
+                report_lines = generate_summary_report(folder_durations)
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(report_lines))
+            print(f"\nSuccess! Text file saved to:\n{output_path}")
+
     except Exception as e:
         print(f"\nError: Could not save the file. Reason: {e}")
 
