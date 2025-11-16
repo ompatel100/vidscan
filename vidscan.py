@@ -69,20 +69,26 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
             if duration > 0:
                 dirpath = os.path.dirname(path)
                 filename = os.path.basename(path)
+                mtime = os.path.getmtime(path)
                 
                 if dirpath not in folder_data:
                     folder_data[dirpath] = {'files': []}
                 
-                folder_data[dirpath]['files'].append({'name': filename, 'duration': duration})
+                folder_data[dirpath]['files'].append({
+                    'name': filename, 
+                    'duration': duration, 
+                    'mtime': mtime
+                })
 
     for info in folder_data.values():
         info['total_seconds'] = sum(f['duration'] for f in info['files'])
         info['video_count'] = len(info['files'])
-    
+        info['last_modified'] = max(f['mtime'] for f in info['files'])
+        
     print("\nProcessing complete.")
     return folder_data
 
-def generate_summary_report(data: Dict[str, Any]) -> List[str]:
+def generate_summary_report(sorted_data: List[tuple]) -> List[str]:
     lines = [
         "Video Duration (Summary)", 
         "=" * 40,
@@ -92,13 +98,11 @@ def generate_summary_report(data: Dict[str, Any]) -> List[str]:
     grand_total_seconds = 0.0
     grand_total_videos = 0
 
-    for folder_path, info in sorted(data.items()):
-        folder_name = os.path.basename(folder_path)
-        if not folder_name:
-            folder_name = os.path.basename(os.path.normpath(folder_path))
+    for folder_path, info in sorted_data:
+        folder_name = os.path.basename(folder_path) or os.path.basename(os.path.normpath(folder_path))
 
         lines.append(f"Folder: {folder_name}")
-        lines.append(f"  -> Videos: {info['video_count']:>3} | Duration: {format_seconds_hms(info['total_seconds'])} | ")
+        lines.append(f"  -> Videos: {info['video_count']:>3} | Duration: {format_seconds_hms(info['total_seconds'])}")
         lines.append("-" * 40)
         
         grand_total_seconds += info['total_seconds']
@@ -106,56 +110,55 @@ def generate_summary_report(data: Dict[str, Any]) -> List[str]:
     
     lines.extend([
         "\nTOTALS",
-        f"  -> Total Folders: {len(data)}",
+        f"  -> Total Folders: {len(sorted_data)}",
         f"  -> Total Videos: {grand_total_videos}",
         f"  -> Total Duration: {format_seconds_hms(grand_total_seconds)}",
         "=" * 40
     ])
     return lines
 
-def generate_detailed_report(data: Dict[str, Any]) -> List[str]:
+def generate_detailed_report(sorted_data: List[tuple]) -> List[str]:
     lines = [
         "Video Duration (Detailed)", 
-        "=" * 60,
+        "=" * 40,
         ""
     ]
     
     grand_total_seconds = 0.0
     grand_total_videos = 0
 
-    for folder_path, info in sorted(data.items()):
-        folder_name = os.path.basename(folder_path)
-        if not folder_name:
-            folder_name = os.path.basename(os.path.normpath(folder_path))
+    for folder_path, info in sorted_data:
+        folder_name = os.path.basename(folder_path) or os.path.basename(os.path.normpath(folder_path))
 
         lines.append(f"Folder: {folder_name}")
-        lines.append(f"  [{info['video_count']:>3} videos | Subtotal: {format_seconds_hms(info['total_seconds'])} ]")
+        lines.append(f"  [ Videos: {info['video_count']:>3} | Subtotal: {format_seconds_hms(info['total_seconds'])} ]")
         
         sorted_files = sorted(info['files'], key=lambda x: x['name'])
         for file_info in sorted_files:
             lines.append(f"    - {file_info['name']} ({format_seconds_hms(file_info['duration'])})")
             
-        lines.append("-" * 60)
+        lines.append("-" * 40)
         
         grand_total_seconds += info['total_seconds']
         grand_total_videos += info['video_count']
     
     lines.extend([
         "\nGRAND TOTAL",
-        f"  -> Total Folders: {len(data)}",
+        f"  -> Total Folders: {len(sorted_data)}",
         f"  -> Total Videos: {grand_total_videos}",
         f"  -> Total Duration: {format_seconds_hms(grand_total_seconds)}",
-        "=" * 60
+        "=" * 40
     ])
     return lines
 
-def write_csv_report(data: Dict[str, Any], output_path: str, root_folder: str):
+def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: str):
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(['Folder Path', 'Relative Path', 'File Name', 'Duration (Seconds)', 'Duration (Formatted)'])
         
-        for folder_path, info in sorted(data.items()):
+        for folder_path, info in sorted_data:
             relative_path = os.path.relpath(folder_path, root_folder)
+            
             sorted_files = sorted(info['files'], key=lambda x: x['name'])
             
             for file_info in sorted_files:
@@ -167,19 +170,30 @@ def write_csv_report(data: Dict[str, Any], output_path: str, root_folder: str):
                     format_seconds_hms(file_info['duration'])
                 ])
 
-def write_json_report(data: Dict[str, Any], output_path: str):
-    total_seconds = sum(info['total_seconds'] for info in data.values())
-    total_videos = sum(len(info['files']) for info in data.values())
+def write_json_report(sorted_data: List[tuple], output_path: str):
+    total_seconds = sum(info['total_seconds'] for _, info in sorted_data)
+    total_videos = sum(info['video_count'] for _, info in sorted_data)
+
+    details_list = []
+    for folder_path, info in sorted_data:
+        details_list.append({
+            "folder_path": folder_path,
+            "video_count": info['video_count'],
+            "total_seconds": info['total_seconds'],
+            "last_modified_timestamp": info['last_modified'],
+            "last_modified_human": datetime.datetime.fromtimestamp(info['last_modified']).isoformat(),
+            "files": sorted(info['files'], key=lambda x: x['name'])
+        })
 
     report_structure = {
         "summary": {
-            "total_folders": len(data),
+            "total_folders": len(sorted_data),
             "total_videos": total_videos,
             "total_duration_seconds": round(total_seconds, 2),
             "total_duration_formatted": format_seconds_hms(total_seconds),
             "generated_at": datetime.datetime.now().isoformat()
         },
-        "data": data
+        "details": details_list
     }
 
     with open(output_path, 'w', encoding='utf-8') as f:
@@ -187,7 +201,8 @@ def write_json_report(data: Dict[str, Any], output_path: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="A high performance tool to calculate total video duration across nested directories."
+        description="A high performance tool to calculate total video duration across nested directories.",
+        formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument(
         "folder_path",
@@ -209,12 +224,24 @@ def main():
         "-f", "--format",
         choices=['txt', 'csv', 'json'],
         default='txt',
-        help="The output format for the report (default: txt).")
+        help="Output file format (default: txt).")
     parser.add_argument(
         "-t", "--template", 
         choices=['summary', 'detailed'], 
         default='summary',
-        help="The output template for the text report (default: summary)."
+        help="Text report template (default: summary)."
+    )
+    parser.add_argument(
+        "-sb", "--sort-by",
+        choices=['name', 'duration', 'videos', 'date'],
+        default='name',
+        help="Sort folders by (default: name)."
+    )
+    parser.add_argument(
+        "-so", "--sort-order",
+        choices=['asc', 'desc'],
+        default='asc',
+        help="Sort order (default: asc)."
     )
     args = parser.parse_args()
 
@@ -252,30 +279,40 @@ def main():
         print("To include other formats, please add them to the VIDEO_EXTENSIONS at the top of the script.")
         return
 
-    if args.template == 'detailed':
-        report_lines = generate_detailed_report(folder_durations)
-    else:
-        report_lines = generate_summary_report(folder_durations)
+    sort_key_func = {
+        'name': lambda item: os.path.basename(item[0]),
+        'duration': lambda item: item[1]['total_seconds'],
+        'videos': lambda item: item[1]['video_count'],
+        'date': lambda item: item[1]['last_modified']
+    }[args.sort_by]
 
+    is_descending = (args.sort_order == 'desc')
+
+    sorted_data = sorted(
+        folder_durations.items(),
+        key=sort_key_func,
+        reverse=is_descending
+    )
+    
     folder_name = os.path.basename(os.path.normpath(root_folder))
     output_filename = f"{folder_name} - Video Duration.{args.format}"
     output_path = os.path.join(root_folder, output_filename)
     
     try:
         if args.format == 'csv':
-            write_csv_report(folder_durations, output_path, root_folder)
+            write_csv_report(sorted_data, output_path, root_folder)
             print(f"\nSuccess! CSV file saved to:\n{output_path}")
             
         elif args.format == 'json':
-            write_json_report(folder_durations, output_path)
+            write_json_report(sorted_data, output_path)
             print(f"\nSuccess! JSON file saved to:\n{output_path}")
             
         else:
             if args.template == 'detailed':
-                report_lines = generate_detailed_report(folder_durations)
+                report_lines = generate_detailed_report(sorted_data)
             else:
-                report_lines = generate_summary_report(folder_durations)
-
+                report_lines = generate_summary_report(sorted_data)
+            
             timestamp = f"Generated on: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             report_lines.append(timestamp)
             report_content = "\n".join(report_lines)
