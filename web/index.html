@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VidScan Web</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Rajdhani:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main id="landing" class="container">
+      <h1 id="vidscan-title">VIDSCAN WEB</h1>
+
+      <div id="drop-zone" class="drop-zone">
+        <h3>Drag Folder Here</h3>
+        <p>or</p>
+        <button onclick="document.getElementById('folder-input').click()">
+          Browse Folder
+        </button>
+        <input
+          type="file"
+          id="folder-input"
+          webkitdirectory
+          directory
+          multiple
+          hidden
+        />
+      </div>
+      <p id="privacy">
+        🔒 <strong>Privacy:</strong> No files are uploaded. All processing
+        happens locally in your browser.
+      </p>
+    </main>
+
+    <main id="dashboard" class="container hidden">
+      <h1 id="vidscan-title-small">VIDSCAN WEB</h1>
+
+      <section class="summary-bar">
+        <div class="card">
+          <span class="label">Total Duration</span>
+          <span id="total-duration" class="value">00:00:00</span>
+        </div>
+        <div class="card">
+          <span class="label">Total Videos</span>
+          <span id="total-count" class="value">0</span>
+        </div>
+        <div class="card">
+          <span class="label">Total Size</span>
+          <span id="total-size" class="value">0.00 GB</span>
+        </div>
+      </section>
+
+      <div class="action-bar">
+        <span id="status"></span>
+        <button id="reset-btn">Reset</button>
+      </div>
+
+      <div class="table-container">
+        <table id="results-table">
+          <thead>
+            <tr>
+              <th style="width: 50%">Folder Name</th>
+              <th>Videos</th>
+              <th>Duration</th>
+              <th>Size</th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
