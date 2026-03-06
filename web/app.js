@@ -17,6 +17,28 @@ const els = {
   resetBtn: document.getElementById("reset-btn"),
 };
 
+const mediainfoWorker = new Worker("./mediainfo-worker.js");
+
+function getWasmDuration(file) {
+  return new Promise((resolve, reject) => {
+    const listener = (e) => {
+      const { success, fileName, duration, error } = e.data;
+
+      if (fileName === file.name) {
+        mediainfoWorker.removeEventListener("message", listener);
+        if (success) {
+          resolve(duration);
+        } else {
+          reject(new Error(error));
+        }
+      }
+    };
+
+    mediainfoWorker.addEventListener("message", listener);
+    mediainfoWorker.postMessage(file);
+  });
+}
+
 ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
   els.dropZone.addEventListener(
     eventName,
@@ -122,7 +144,7 @@ function handleFiles(rawFiles) {
 }
 
 function isVideo(file) {
-  return file.name.match(/\.(mp4|webm|mov)$/i);
+  return file.name.match(/\.(mp4|webm|mov|mkv|avi|flv|wmv|m4v)$/i);
 }
 
 function getFolderName(file) {
@@ -174,10 +196,24 @@ async function processFiles(files) {
     els.status.innerText = `> Processing video ${i + 1} of ${files.length}...`;
 
     const folderName = getFolderName(file);
+    let duration = 0;
 
-    if (file.name.match(/\.(mp4|webm|mov)$/i)) {
-      try {
-        const duration = await getDuration(file);
+    try {
+      if (file.name.match(/\.(mp4|webm|mov|m4v)$/i)) {
+        try {
+          duration = await getDuration(file);
+        } catch (err) {
+          console.warn(
+            `Native scan failed for ${file.name}. Falling back to WASM...`,
+          );
+          duration = await getWasmDuration(file);
+        }
+      } else {
+        console.log(`Sending ${file.name} to WASM worker...`);
+        duration = await getWasmDuration(file);
+      }
+
+      if (duration > 0) {
         const folder = state.folderMap.get(folderName);
         if (folder) {
           folder.duration += duration;
@@ -185,9 +221,9 @@ async function processFiles(files) {
           updateFolderRow(folderName);
           updateTotalStats();
         }
-      } catch (e) {
-        console.warn(`Could not read duration for: ${file.name}`);
       }
+    } catch (e) {
+      console.error(`Could not read duration for: ${file.name}`, e);
     }
   }
 
