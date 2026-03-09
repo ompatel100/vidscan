@@ -19,26 +19,6 @@ const els = {
 
 const mediainfoWorker = new Worker("./mediainfo-worker.js");
 
-function getWasmDuration(file) {
-  return new Promise((resolve, reject) => {
-    const listener = (e) => {
-      const { success, fileName, duration, error } = e.data;
-
-      if (fileName === file.name) {
-        mediainfoWorker.removeEventListener("message", listener);
-        if (success) {
-          resolve(duration);
-        } else {
-          reject(new Error(error));
-        }
-      }
-    };
-
-    mediainfoWorker.addEventListener("message", listener);
-    mediainfoWorker.postMessage(file);
-  });
-}
-
 ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
   els.dropZone.addEventListener(
     eventName,
@@ -188,50 +168,81 @@ function initializeFolders(files) {
   updateTotalStats();
 }
 
+async function runQueue(files, concurrencyLimit, processCallback) {
+  let index = 0;
+
+  const worker = async () => {
+    while (index < files.length) {
+      const currentIndex = index++;
+      await processCallback(files[currentIndex]);
+    }
+  };
+
+  const workers = [];
+  for (let i = 0; i < concurrencyLimit; i++) {
+    workers.push(worker());
+  }
+
+  await Promise.all(workers);
+}
+
 async function processFiles(files) {
   state.isScanning = true;
+  let processedCount = 0;
 
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    els.status.innerText = `> Processing video ${i + 1} of ${files.length}...`;
+  const updateProgress = (fileName) => {
+    processedCount++;
+    els.status.innerText = `> Processed ${processedCount} of ${files.length}... (${fileName})`;
+  };
 
-    const folderName = getFolderName(file);
-    let duration = 0;
+  const nativeFiles = [];
+  const wasmFiles = [];
 
+  files.forEach((file) => {
+    if (file.name.match(/\.(mp4|webm|mov|m4v)$/i)) {
+      nativeFiles.push(file);
+    } else {
+      wasmFiles.push(file);
+    }
+  });
+
+  const processNativeFile = async (file) => {
     try {
-      if (file.name.match(/\.(mp4|webm|mov|m4v)$/i)) {
-        try {
-          duration = await getDuration(file);
-        } catch (err) {
-          console.warn(
-            `Native scan failed for ${file.name}. Falling back to WASM...`,
-          );
-          duration = await getWasmDuration(file);
-        }
-      } else {
-        console.log(`Sending ${file.name} to WASM worker...`);
+      let duration = 0;
+      try {
+        duration = await getNativeDuration(file);
+      } catch (err) {
         duration = await getWasmDuration(file);
       }
-
-      if (duration > 0) {
-        const folder = state.folderMap.get(folderName);
-        if (folder) {
-          folder.duration += duration;
-          state.total.duration += duration;
-          updateFolderRow(folderName);
-          updateTotalStats();
-        }
-      }
+      saveDurationToState(file, duration);
     } catch (e) {
-      console.error(`Could not read duration for: ${file.name}`, e);
+      console.warn(`Failed both native and wasm for: ${file.name}`);
+    } finally {
+      updateProgress(file.name);
     }
-  }
+  };
+
+  const processWasmFile = async (file) => {
+    try {
+      const duration = await getWasmDuration(file);
+      saveDurationToState(file, duration);
+    } catch (e) {
+      console.warn(`Failed wasm for: ${file.name}`);
+    } finally {
+      updateProgress(file.name);
+    }
+  };
+
+  await Promise.all([
+    runQueue(nativeFiles, 1, processNativeFile),
+    runQueue(wasmFiles, 1, processWasmFile),
+  ]);
 
   els.status.innerText = "> Scan Complete.";
   state.isScanning = false;
 }
 
-function getDuration(file) {
+function getNativeDuration(file) {
   return new Promise((resolve, reject) => {
     const video = document.createElement("video");
     video.preload = "metadata";
@@ -254,6 +265,40 @@ function getDuration(file) {
       setTimeout(() => URL.revokeObjectURL(objectUrl), 100);
     };
   });
+}
+
+function getWasmDuration(file) {
+  return new Promise((resolve, reject) => {
+    const listener = (e) => {
+      const { success, fileName, duration, error } = e.data;
+
+      if (fileName === file.name) {
+        mediainfoWorker.removeEventListener("message", listener);
+        if (success) {
+          resolve(duration);
+        } else {
+          reject(new Error(error));
+        }
+      }
+    };
+
+    mediainfoWorker.addEventListener("message", listener);
+    mediainfoWorker.postMessage(file);
+  });
+}
+
+function saveDurationToState(file, duration) {
+  if (duration <= 0) return;
+
+  const folderName = getFolderName(file);
+  const folder = state.folderMap.get(folderName);
+
+  if (folder) {
+    folder.duration += duration;
+    state.total.duration += duration;
+    updateFolderRow(folderName);
+    updateTotalStats();
+  }
 }
 
 function createTableRow(folderName, rowId) {
