@@ -24,22 +24,25 @@ export function getNativeDuration(file) {
     video.preload = "metadata";
 
     const objectUrl = URL.createObjectURL(file);
-    video.src = objectUrl;
+
+    const cleanup = () => {
+      video.removeAttribute("src");
+      video.load();
+      URL.revokeObjectURL(objectUrl);
+    };
 
     video.onloadedmetadata = () => {
-      resolve(video.duration);
-
-      setTimeout(() => {
-        URL.revokeObjectURL(objectUrl);
-        video.src = "";
-        video.remove();
-      }, 100);
+      const duration = video.duration;
+      cleanup();
+      resolve(duration);
     };
 
     video.onerror = () => {
-      reject();
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 100);
+      cleanup();
+      reject(new Error(`Failed for native file: ${file.name}`));
     };
+
+    video.src = objectUrl;
   });
 }
 
