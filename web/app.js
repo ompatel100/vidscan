@@ -79,10 +79,23 @@ els.input.addEventListener("change", (e) => {
 
 els.resetBtn.addEventListener("click", () => location.reload());
 
+function getNativeConcurrent() {
+  const userInput = window.prompt(
+    "Enter no. of concurrent files for browser native formats:",
+    "1",
+  );
+  return parseInt(userInput, 10) || 1;
+}
+
 function handleFiles(rawFiles) {
   const videoFiles = rawFiles.filter(isVideo);
-  initializeFolders(videoFiles);
-  processFiles(videoFiles);
+
+  if (videoFiles.length > 0) {
+    const nativeConcurrent = getNativeConcurrent();
+
+    initializeFolders(videoFiles);
+    processFiles(videoFiles, nativeConcurrent);
+  }
 }
 
 function initializeFolders(files) {
@@ -112,7 +125,7 @@ function initializeFolders(files) {
   updateTotalStats();
 }
 
-async function processFiles(files) {
+async function processFiles(files, nativeConcurrent) {
   state.isScanning = true;
   let processedCount = 0;
 
@@ -160,7 +173,7 @@ async function processFiles(files) {
   };
 
   await Promise.all([
-    runQueue(nativeFiles, 1, processNativeFile),
+    runQueue(nativeFiles, nativeConcurrent, processNativeFile),
     runQueue(wasmFiles, 1, processWasmFile),
   ]);
 
