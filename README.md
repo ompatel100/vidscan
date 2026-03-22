@@ -7,7 +7,6 @@ A high performance command line tool to analyze video libraries, calculate total
 ## Features
 
 - **High Performance:** Uses concurrency to scan large folders much faster by processing multiple video files at the same time.
-- **Dual Setup Options:** You choose the installation. The script works with a simple `pip install` (using `moviepy`) for convenience, or it can detect and use a system-wide `ffprobe` (FFmpeg) for maximum performance.
 - **CLI:** You can change everything through command line. Give folder path, folders to exclude, number of parallel threads, report format and template, sort and order in the CLI itself.
 - **Recursive Scanning:** Automatically scans all nested subfolders.
 - **Flexible Output Formats:** Generate reports in `.txt`, `.csv` and `.json` formats.
@@ -18,17 +17,6 @@ A high performance command line tool to analyze video libraries, calculate total
 
 ## Installation
 
-This tool can read video durations in two different ways. You need to follow the common steps first and then any **one** of the two options below.
-
-- **For the fastest performance,** choose **Option 1**. This is the recommended method, it requires you to be comfortable installing FFmpeg and adding it to your system's PATH.
-- **For the simplest setup,** choose **Option 2**. This method is a good alternative if you only plan to scan smaller folders and prefer a single `pip install` command.
-
-The script will **automatically detect** which method you have installed. If it finds `ffprobe` (Option 1), it will use it. If not, it will look for `moviepy` (Option 2).
-
----
-
-### **Common Steps (Required for all users)**
-
 1. **Install Python (3.8+)** from [python.org](https://www.python.org/downloads/).
 2. **Get the Script:** Download the ZIP or clone the repository:
 
@@ -36,29 +24,8 @@ The script will **automatically detect** which method you have installed. If it 
 git clone https://github.com/ompatel100/vidscan.git
 ```
 
-### **Option 1: Using ffprobe (Recommended)**
-
-1. **Install FFmpeg** from [ffmpeg.org](https://ffmpeg.org/download.html).
-2. **Add the FFmpeg `bin` folder** (which contains `ffprobe.exe`) to your **system's PATH**.
-
-That's it! You can now run the script (see Usage section).
-
-### **Option 2: Using moviepy (Slower)**
-
-1. **Create a Virtual Environment (Optional but Recommended):**
-
-    ```bash
-    cd /Path/To/Project/Folder
-    python -m venv venv
-    ./venv/Scripts/activate
-    ```
-
-2. **Install Dependencies:**
-    Run this command to install `moviepy`:
-
-    ```bash
-    pip install -r requirements.txt
-    ```
+3. **Install FFmpeg** from [ffmpeg.org](https://ffmpeg.org/download.html).
+4. **Add the FFmpeg `bin` folder** (which contains `ffprobe.exe`) to your **system's PATH**.
 
 ---
 
@@ -236,7 +203,7 @@ Folder: Folder Name 2
   [ Videos:   3 | Subtotal: 0:48:19 ]
     - Video Name 3.mp4 (0:11:43)
     - Video Name 4.mp4 (0:20:09)
-    - Video Name 5.mp4 (0:16:27)             
+    - Video Name 5.mp4 (0:16:27)
 ----------------------------------------
 
 GRAND TOTAL
