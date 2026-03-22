@@ -16,17 +16,12 @@ FFPROBE_PATH = shutil.which('ffprobe')
 
 def get_video_duration(file_path: str) -> float:
     try:
-        if FFPROBE_PATH:
-            command = [
-                FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1", file_path
-            ]
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
-            return float(result.stdout)
-        else:
-            from moviepy import VideoFileClip 
-            with VideoFileClip(file_path) as clip:
-                return clip.duration if clip.duration else 0.0
+        command = [
+            FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", file_path
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        return float(result.stdout)
     except Exception as e:
         print(f"Warning: Could not process file '{os.path.basename(file_path)}'. Error: {e}")
         return 0.0
@@ -245,32 +240,22 @@ def main():
     )
     args = parser.parse_args()
 
+    if not FFPROBE_PATH:
+        print("\n--- ERROR: ffprobe not found in system PATH ---")
+        print("This script requires FFmpeg to work.")
+        print("Install FFmpeg from https://ffmpeg.org/download.html and add it to your system's PATH.")
+        return
+
     root_folder = args.folder_path
     excluded_set = set(args.exclude)
-
-    print(f"Scanning folder: {root_folder}")
-    if excluded_set:
-        print(f"Excluding folders: {', '.join(excluded_set)}")
 
     if not os.path.isdir(root_folder):
         print(f"Error: The path '{root_folder}' is not a valid directory.")
         return
-    
-    if FFPROBE_PATH:
-        print("Using ffprobe for scanning.")
-    else:
-        print("ffprobe not found in system PATH. Checking for moviepy...")
-        try:
-            from moviepy import VideoFileClip
-            print("Using moviepy (slower).")
-        except ImportError:
-            print("\n--- ERROR: ffprobe or moviepy not found ---")
-            print("This script requires either FFmpeg or the moviepy library to work.")
-            print("\nOption 1 (Recommended for best performance):")
-            print("  Install FFmpeg from https://ffmpeg.org/download.html and add it to your system's PATH.")
-            print("\nOption 2 (Easy to setup but slower):")
-            print("  Install moviepy: pip install moviepy~=2.2")
-            return
+
+    print(f"Scanning folder: {root_folder}")
+    if excluded_set:
+        print(f"Excluding folders: {', '.join(excluded_set)}")
 
     folder_durations = scan_videos_concurrently(root_folder, excluded_set, args.workers)
 
