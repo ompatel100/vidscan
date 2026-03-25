@@ -6,7 +6,7 @@ import concurrent.futures
 import csv
 import json
 import datetime
-from typing import Dict, List, Any
+from typing import Dict, Iterator, List, Any, Tuple
 
 # --- USER CONFIGURATION ---
 # File extensions that you want to scan
@@ -33,38 +33,41 @@ def format_seconds_hms(seconds: float) -> str:
     secs = seconds % 60
     return f"{hours}:{minutes:02d}:{secs:02d}"
 
+def stream_video_files(root_folder: str, excluded_set: set) -> Iterator[Tuple[str, float]]:
+    stack = [root_folder]
+    while stack:
+        current_dir = stack.pop()
+        with os.scandir(current_dir) as entries:
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name not in excluded_set:
+                        stack.append(entry.path)
+                elif entry.is_file(follow_symlinks=False):
+                    ext = os.path.splitext(entry.name)[1].lower()
+                    if ext in VIDEO_EXTENSIONS:
+                        yield entry.path, entry.stat().st_mtime
+
 def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int) -> Dict[str, Any]:
-    tasks = []
-    print("Finding video files...")
-    for dirpath, dirs, filenames in os.walk(root_folder):
-        dirs[:] = [d for d in dirs if d not in excluded_set]
-        
-        for filename in filenames:
-            if os.path.splitext(filename)[1].lower() in VIDEO_EXTENSIONS:
-                tasks.append(os.path.join(dirpath, filename))
-
-    if not tasks:
-        return {}
-
-    print(f"Found {len(tasks)} video files. Processing with {num_workers} workers...")
-    
     folder_data: Dict[str, Any] = {}
+    files_processed = 0
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        future_to_path = {executor.submit(get_video_duration, path): path for path in tasks}
-        
-        for i, future in enumerate(concurrent.futures.as_completed(future_to_path)):
-            path = future_to_path[future]
+        future_to_file = {}
+
+        for file_path, mtime in stream_video_files(root_folder, excluded_set):
+            future = executor.submit(get_video_duration, file_path)
+            future_to_file[future] = (file_path, mtime)
+
+        for future in concurrent.futures.as_completed(future_to_file):
+            file_path, mtime = future_to_file[future]
             duration = future.result()
             
-            progress = (i + 1) / len(tasks)
-            bar = '█' * int(progress * 40)
-            print(f'\rProgress: [{bar:<40}] {int(progress*100)}%', end="")
+            files_processed += 1
+            print(f'\rFiles processed: {files_processed}  ', end="")
 
             if duration > 0:
-                dirpath = os.path.dirname(path)
-                filename = os.path.basename(path)
-                mtime = os.path.getmtime(path)
+                dirpath = os.path.dirname(file_path)
+                filename = os.path.basename(file_path)
                 
                 if dirpath not in folder_data:
                     folder_data[dirpath] = {'files': []}
