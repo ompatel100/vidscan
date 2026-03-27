@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import argparse
 import concurrent.futures
+import time
 import csv
 import json
 import datetime
@@ -49,7 +50,19 @@ def stream_video_files(root_folder: str, excluded_set: set) -> Iterator[Tuple[st
 
 def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int) -> Dict[str, Any]:
     folder_data: Dict[str, Any] = {}
+    
+    print("Scanning directory structure...")
+    start_time = time.time()
+    total_files = sum(1 for _ in stream_video_files(root_folder, excluded_set))
+    
+    if total_files == 0:
+        return folder_data
+
+    print(f"Found {total_files} video files. Processing with {num_workers} workers...")
+    
     files_processed = 0
+    last_print_time = 0.0
+    update_interval = 0.1
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
         future_to_file = {}
@@ -63,7 +76,6 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
             duration = future.result()
             
             files_processed += 1
-            print(f'\rFiles processed: {files_processed}  ', end="")
 
             if duration > 0:
                 dirpath = os.path.dirname(file_path)
@@ -78,12 +90,25 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
                     'mtime': mtime
                 })
 
+            current_time = time.time()
+            
+            if current_time - last_print_time >= update_interval or files_processed == total_files:
+                progress = files_processed / total_files
+                bar_length = 40
+                filled = int(bar_length * progress)
+                bar = '█' * filled + '-' * (bar_length - filled)
+                percent = int(progress * 100)
+
+                print(f'\rProgress: [{bar}] {percent}% ({files_processed}/{total_files})', end="", flush=True)
+                last_print_time = current_time
+
+    print(f"\nProcessing complete in {time.time() - start_time:.2f} seconds.")
+
     for info in folder_data.values():
         info['total_seconds'] = sum(f['duration'] for f in info['files'])
         info['video_count'] = len(info['files'])
         info['last_modified'] = max(f['mtime'] for f in info['files'])
         
-    print("\nProcessing complete.")
     return folder_data
 
 def generate_summary_report(sorted_data: List[tuple]) -> List[str]:
