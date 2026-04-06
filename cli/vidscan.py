@@ -23,8 +23,7 @@ def get_video_duration(file_path: str) -> float:
         ]
         result = subprocess.run(command, capture_output=True, text=True, check=True)
         return float(result.stdout)
-    except Exception as e:
-        print(f"Warning: Could not process file '{os.path.basename(file_path)}'. Error: {e}")
+    except Exception:
         return 0.0
 
 def format_seconds_hms(seconds: float) -> str:
@@ -48,7 +47,7 @@ def stream_video_files(root_folder: str, excluded_set: set) -> Iterator[Tuple[st
                     if ext in VIDEO_EXTENSIONS:
                         yield entry.path, entry.stat().st_mtime
 
-def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int) -> Dict[str, Any]:
+def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int) -> Tuple[Dict[str, Any], int, int, int]:
     folder_data: Dict[str, Any] = {}
     
     print("Scanning directory structure...")
@@ -56,11 +55,14 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
     total_files = sum(1 for _ in stream_video_files(root_folder, excluded_set))
     
     if total_files == 0:
-        return folder_data
+        return folder_data, 0, 0, 0
 
     print(f"Found {total_files} video files. Processing with {num_workers} workers...")
     
     files_processed = 0
+    success_count = 0
+    failed_count = 0
+    
     last_print_time = 0.0
     update_interval = 0.1
     
@@ -78,6 +80,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
             files_processed += 1
 
             if duration > 0:
+                success_count += 1
                 dirpath = os.path.dirname(file_path)
                 filename = os.path.basename(file_path)
                 
@@ -89,6 +92,8 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
                     'duration': duration, 
                     'mtime': mtime
                 })
+            else:
+                failed_count += 1
 
             current_time = time.time()
             
@@ -96,7 +101,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
                 progress = files_processed / total_files
                 bar_length = 40
                 filled = int(bar_length * progress)
-                bar = '█' * filled + '-' * (bar_length - filled)
+                bar = '#' * filled + '-' * (bar_length - filled)
                 percent = int(progress * 100)
 
                 print(f'\rProgress: [{bar}] {percent}% ({files_processed}/{total_files})', end="", flush=True)
@@ -109,9 +114,9 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
         info['video_count'] = len(info['files'])
         info['last_modified'] = max(f['mtime'] for f in info['files'])
         
-    return folder_data
+    return folder_data, total_files, success_count, failed_count
 
-def generate_summary_report(sorted_data: List[tuple]) -> List[str]:
+def generate_summary_report(sorted_data: List[tuple], failed_count: int) -> List[str]:
     lines = [
         "Video Duration (Summary)", 
         "=" * 40,
@@ -138,9 +143,17 @@ def generate_summary_report(sorted_data: List[tuple]) -> List[str]:
         f"  -> Total Duration: {format_seconds_hms(grand_total_seconds)}",
         "=" * 40
     ])
+
+    if failed_count > 0:
+        lines.extend([
+            "",
+            "---",
+            f"[!] Note: Scanning failed for {failed_count} videos and are excluded from this report."
+        ])
+
     return lines
 
-def generate_detailed_report(sorted_data: List[tuple]) -> List[str]:
+def generate_detailed_report(sorted_data: List[tuple], failed_count: int) -> List[str]:
     lines = [
         "Video Duration (Detailed)", 
         "=" * 40,
@@ -172,9 +185,17 @@ def generate_detailed_report(sorted_data: List[tuple]) -> List[str]:
         f"  -> Total Duration: {format_seconds_hms(grand_total_seconds)}",
         "=" * 40
     ])
+
+    if failed_count > 0:
+        lines.extend([
+            "",
+            "---",
+            f"[!] Note: Scanning failed for {failed_count} videos and are excluded from this report."
+        ])
+
     return lines
 
-def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: str):
+def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: str, total_videos: int, success_count: int, failed_count: int):
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(['Folder Path', 'Relative Path', 'File Name', 'Duration (Seconds)', 'Duration (Formatted)'])
@@ -193,7 +214,13 @@ def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: st
                     format_seconds_hms(file_info['duration'])
                 ])
 
-def write_json_report(sorted_data: List[tuple], output_path: str):
+        writer.writerow([])
+        writer.writerow(['--- SCAN SUMMARY ---', '', '', '', ''])
+        writer.writerow(['Total Videos Discovered', total_videos, '', '', ''])
+        writer.writerow(['Successful', success_count, '', '', ''])
+        writer.writerow(['Failed', failed_count, '', '', ''])
+
+def write_json_report(sorted_data: List[tuple], output_path: str, total_videos: int, success_count: int, failed_count: int):
     total_seconds = sum(info['total_seconds'] for _, info in sorted_data)
     total_videos = sum(info['video_count'] for _, info in sorted_data)
 
@@ -211,7 +238,9 @@ def write_json_report(sorted_data: List[tuple], output_path: str):
     report_structure = {
         "summary": {
             "total_folders": len(sorted_data),
-            "total_videos": total_videos,
+            "total_videos_discovered": total_videos,
+            "successful_videos": success_count,
+            "failed_videos": failed_count,
             "total_duration_seconds": round(total_seconds, 2),
             "total_duration_formatted": format_seconds_hms(total_seconds),
             "generated_at": datetime.datetime.now().isoformat()
@@ -285,11 +314,14 @@ def main():
     if excluded_set:
         print(f"Excluding folders: {', '.join(excluded_set)}")
 
-    folder_durations = scan_videos_concurrently(root_folder, excluded_set, args.workers)
+    folder_durations, total_videos, success_count, failed_count = scan_videos_concurrently(root_folder, excluded_set, args.workers)
 
     if not folder_durations:
-        print(f"\nNo video files found with the configured extensions: {', '.join(sorted(list(VIDEO_EXTENSIONS)))}")
-        print("To include other formats, please add them to the VIDEO_EXTENSIONS at the top of the script.")
+        if failed_count > 0:
+            print(f"\nError: Found {failed_count} videos, but all of them failed.")
+        else:
+            print(f"\nNo video files found with the configured extensions: {', '.join(sorted(list(VIDEO_EXTENSIONS)))}")
+            print("To include other formats, please add them to the VIDEO_EXTENSIONS at the top of the script.")
         return
 
     sort_key_func = {
@@ -313,18 +345,18 @@ def main():
     
     try:
         if args.format == 'csv':
-            write_csv_report(sorted_data, output_path, root_folder)
+            write_csv_report(sorted_data, output_path, root_folder, total_videos, success_count, failed_count)
             print(f"\nSuccess! CSV file saved to:\n{output_path}")
             
         elif args.format == 'json':
-            write_json_report(sorted_data, output_path)
+            write_json_report(sorted_data, output_path, total_videos, success_count, failed_count)
             print(f"\nSuccess! JSON file saved to:\n{output_path}")
             
         else:
             if args.template == 'detailed':
-                report_lines = generate_detailed_report(sorted_data)
+                report_lines = generate_detailed_report(sorted_data, failed_count)
             else:
-                report_lines = generate_summary_report(sorted_data)
+                report_lines = generate_summary_report(sorted_data, failed_count)
             
             timestamp = f"Generated on: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             report_lines.append(timestamp)
@@ -340,6 +372,9 @@ def main():
 
     except Exception as e:
         print(f"\nError: Could not save the file. Reason: {e}")
+
+    if failed_count > 0:
+        print(f"\n[!] Note: Scanning failed for {failed_count} videos.")
 
 if __name__ == "__main__":
     main()
