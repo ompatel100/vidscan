@@ -15,6 +15,10 @@ VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'}
 
 FFPROBE_PATH = shutil.which('ffprobe')
 
+DEFAULT_W = min(4, os.cpu_count() or 1)
+DEFAULT_W_SSD = min(32, os.cpu_count() or 1)
+MAX_W = 128
+
 def get_video_duration(file_path: str) -> float:
     try:
         command = [
@@ -251,6 +255,20 @@ def write_json_report(sorted_data: List[tuple], output_path: str, total_videos: 
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(report_structure, f, indent=4)
 
+def parse_w_flag(value: str) -> int:
+    try:
+        w = int(value)
+        if w <= 0:
+            raise argparse.ArgumentTypeError("--workers must be atleast 1")
+        
+        return min(w, MAX_W)
+        
+    except ValueError:
+        if value.strip().lower() == 'ssd':
+            return DEFAULT_W_SSD
+        
+        return DEFAULT_W
+
 def main():
     parser = argparse.ArgumentParser(
         description="A high performance tool to calculate total video duration across nested directories.",
@@ -268,9 +286,14 @@ def main():
     )
     parser.add_argument(
         "-w", "--workers",
-        type=int,
-        default=min(32, (os.cpu_count() or 1) + 4),
-        help="Number of parallel threads to use.\n(default: dynamically calculated for your system)"
+        type=parse_w_flag,
+        default=DEFAULT_W,
+        help=(
+            f"Number of parallel threads to use (default: {DEFAULT_W} for your system)\n"
+            f"-w ssd : Uses an optimal {DEFAULT_W_SSD} for your system, provide it if you have an SSD\n"
+            "-w <n> : Manually provide threads (e.g. -w 6)\n"
+            "Anything else will fall back to default"
+        )
     )
     parser.add_argument(
         "-f", "--format",
