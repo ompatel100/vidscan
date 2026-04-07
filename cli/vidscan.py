@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import argparse
 import concurrent.futures
+import sys
 import time
 import csv
 import json
@@ -152,7 +153,7 @@ def generate_summary_report(sorted_data: List[tuple], failed_count: int) -> List
         lines.extend([
             "",
             "---",
-            f"[!] Note: Scanning failed for {failed_count} videos and are excluded from this report."
+            f"[!] NOTE: Scanning failed for {failed_count} videos and are excluded from this report."
         ])
 
     return lines
@@ -321,17 +322,28 @@ def main():
     args = parser.parse_args()
 
     if not FFPROBE_PATH:
-        print("\n--- ERROR: ffprobe not found in system PATH ---")
+        print("\nERROR: ffprobe not found in system PATH")
         print("This script requires FFmpeg to work.")
         print("Install FFmpeg from https://ffmpeg.org/download.html and add it to your system's PATH.")
-        return
+        sys.exit(1)
+
+    try:
+        subprocess.run(
+            [FFPROBE_PATH, "-version"], 
+            stdout=subprocess.DEVNULL, 
+            stderr=subprocess.DEVNULL, 
+            check=True
+        )
+    except Exception as e:
+        print(f"ERROR: ffprobe was found, but failed to execute. {e}")
+        sys.exit(1)
 
     root_folder = args.folder_path
     excluded_set = set(args.exclude)
 
     if not os.path.isdir(root_folder):
-        print(f"Error: The path '{root_folder}' is not a valid directory.")
-        return
+        print(f"ERROR: The path '{root_folder}' is not a valid directory.")
+        sys.exit(1)
 
     print(f"Scanning folder: {root_folder}")
     if excluded_set:
@@ -341,11 +353,11 @@ def main():
 
     if not folder_durations:
         if failed_count > 0:
-            print(f"\nError: Found {failed_count} videos, but all of them failed.")
+            print(f"\n[!] NOTE: Found {failed_count} videos, but all of them failed.")
         else:
             print(f"\nNo video files found with the configured extensions: {', '.join(sorted(list(VIDEO_EXTENSIONS)))}")
             print("To include other formats, please add them to the VIDEO_EXTENSIONS at the top of the script.")
-        return
+        sys.exit(0)
 
     sort_key_func = {
         'name': lambda item: os.path.basename(item[0]),
@@ -394,10 +406,10 @@ def main():
             print(f"\nSuccess! Text file saved to:\n{output_path}")
 
     except Exception as e:
-        print(f"\nError: Could not save the file. Reason: {e}")
+        print(f"\nERROR: Could not save the file. Reason: {e}")
 
     if failed_count > 0:
-        print(f"\n[!] Note: Scanning failed for {failed_count} videos.")
+        print(f"\n[!] NOTE: Scanning failed for {failed_count} videos.")
 
 if __name__ == "__main__":
     main()

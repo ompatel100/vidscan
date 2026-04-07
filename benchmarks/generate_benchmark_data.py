@@ -191,7 +191,24 @@ def main():
     if not FFMPEG_PATH or not FFPROBE_PATH:
         print("\n--- ERROR: FFmpeg not found in system PATH ---")
         print("Install FFmpeg from https://ffmpeg.org/download.html and add it to your system's PATH.")
-        return
+        sys.exit(1)
+    
+    try:
+        subprocess.run(
+            [FFMPEG_PATH, "-version"], 
+            stdout=subprocess.DEVNULL, 
+            stderr=subprocess.DEVNULL, 
+            check=True
+        )
+        subprocess.run(
+            [FFPROBE_PATH, "-version"], 
+            stdout=subprocess.DEVNULL, 
+            stderr=subprocess.DEVNULL, 
+            check=True
+        )
+    except Exception as e:
+        print(f"ERROR: FFmpeg and ffprobe were found, but failed to execute. {e}")
+        sys.exit(1)
 
     formats, weights = parse_formats(args.formats)
     total_weight = sum(weights)
