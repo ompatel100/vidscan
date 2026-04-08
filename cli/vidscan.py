@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import argparse
 import concurrent.futures
+import itertools
 import sys
 import time
 import csv
@@ -52,17 +53,24 @@ def stream_video_files(root_folder: str, excluded_set: set) -> Iterator[Tuple[st
                     if ext in VIDEO_EXTENSIONS:
                         yield entry.path, entry.stat().st_mtime
 
-def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int) -> Tuple[Dict[str, Any], int, int, int]:
-    folder_data: Dict[str, Any] = {}
-    
-    print("Scanning directory structure...")
-    start_time = time.time()
-    total_files = sum(1 for _ in stream_video_files(root_folder, excluded_set))
-    
-    if total_files == 0:
-        return folder_data, 0, 0, 0
+def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int, fast_start_mode:bool) -> Tuple[Dict[str, Any], int, int, int]:
+    spinner = itertools.cycle(['|', '/', '-', '\\'])
 
-    print(f"Found {total_files} video files. Processing with {num_workers} workers...")
+    folder_data: Dict[str, Any] = {}
+    total_files = 0
+
+    start_time = time.time()
+
+    if not fast_start_mode:
+        print("Scanning directory structure...")
+        total_files = sum(1 for _ in stream_video_files(root_folder, excluded_set))
+
+        if total_files == 0:
+            return folder_data, 0, 0, 0
+        
+        print(f"Found {total_files} video files.", end=" ")
+
+    print(f"Processing with {num_workers} workers...")
     
     files_processed = 0
     success_count = 0
@@ -103,14 +111,17 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
             current_time = time.time()
             
             if current_time - last_print_time >= update_interval or files_processed == total_files:
-                progress = files_processed / total_files
-                bar_length = 40
-                filled = int(bar_length * progress)
-                bar = '#' * filled + '-' * (bar_length - filled)
-                percent = int(progress * 100)
+                if fast_start_mode:
+                    print(f'\r[{next(spinner)}] Files processed: {files_processed}', end="", flush=True)
+                else:
+                    progress = files_processed / total_files
+                    bar_length = 40
+                    filled = int(bar_length * progress)
+                    bar = '#' * filled + '-' * (bar_length - filled)
+                    percent = int(progress * 100)
 
-                print(f'\rProgress: [{bar}] {percent}% ({files_processed}/{total_files})', end="", flush=True)
-                last_print_time = current_time
+                    print(f'\rProgress: [{bar}] {percent}% ({files_processed}/{total_files})', end="", flush=True)
+                    last_print_time = current_time
 
     print(f"\nProcessing complete in {time.time() - start_time:.2f} seconds.")
 
@@ -118,7 +129,10 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
         info['total_seconds'] = sum(f['duration'] for f in info['files'])
         info['video_count'] = len(info['files'])
         info['last_modified'] = max(f['mtime'] for f in info['files'])
-        
+
+    if fast_start_mode:
+        total_files = files_processed 
+
     return folder_data, total_files, success_count, failed_count
 
 def generate_summary_report(sorted_data: List[tuple], failed_count: int) -> List[str]:
@@ -319,6 +333,12 @@ def main():
         default='asc',
         help="Sort order (default: asc)."
     )
+    parser.add_argument(
+        "--fast-start",
+        action="store_true",
+        help="Directly start processing (Recommended for network drives).\n"
+            "Note: Only processed count will be displayed, not progress bar."
+    )
     args = parser.parse_args()
 
     if not FFPROBE_PATH:
@@ -349,7 +369,7 @@ def main():
     if excluded_set:
         print(f"Excluding folders: {', '.join(excluded_set)}")
 
-    folder_durations, total_videos, success_count, failed_count = scan_videos_concurrently(root_folder, excluded_set, args.workers)
+    folder_durations, total_videos, success_count, failed_count = scan_videos_concurrently(root_folder, excluded_set, args.workers, args.fast_start)
 
     if not folder_durations:
         if failed_count > 0:
