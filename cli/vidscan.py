@@ -21,6 +21,23 @@ DEFAULT_W = min(4, os.cpu_count() or 1)
 DEFAULT_W_SSD = min(32, os.cpu_count() or 1)
 MAX_W = 128
 
+def get_ui() -> Dict[str, Any]:
+    stdout_encoding = getattr(sys.stdout, 'encoding', '')
+    if stdout_encoding and stdout_encoding.lower() in ['utf-8', 'utf8']:
+        return {
+            'is_terminal': sys.stdout.isatty(),
+            'bar_fill': '█',
+            'bar_empty': '░',
+            'spinner': itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
+        }
+    else:
+        return {
+            'is_terminal': sys.stdout.isatty(),
+            'bar_fill': '=',
+            'bar_empty': '-',
+            'spinner': itertools.cycle(['|', '/', '-', '\\'])
+        }
+
 def get_video_duration(file_path: str) -> float:
     try:
         command = [
@@ -53,9 +70,7 @@ def stream_video_files(root_folder: str, excluded_set: set) -> Iterator[Tuple[st
                     if ext in VIDEO_EXTENSIONS:
                         yield entry.path, entry.stat().st_mtime
 
-def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int, fast_start_mode:bool) -> Tuple[Dict[str, Any], int, int, int]:
-    spinner = itertools.cycle(['|', '/', '-', '\\'])
-
+def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, int]:
     folder_data: Dict[str, Any] = {}
     total_files = 0
 
@@ -108,19 +123,22 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
             else:
                 failed_count += 1
 
-            current_time = time.time()
-            
-            if current_time - last_print_time >= update_interval or files_processed == total_files:
-                if fast_start_mode:
-                    print(f'\r[{next(spinner)}] Files processed: {files_processed}', end="", flush=True)
-                else:
-                    progress = files_processed / total_files
-                    bar_length = 40
-                    filled = int(bar_length * progress)
-                    bar = '#' * filled + '-' * (bar_length - filled)
-                    percent = int(progress * 100)
+            if ui['is_terminal']:
+                current_time = time.time()
+                if current_time - last_print_time >= update_interval or files_processed == total_files:
+                    if fast_start_mode:
+                        spinner = next(ui['spinner'])
+                        print(f'\r[{spinner}] Files processed: {files_processed}', end="", flush=True)
+                    else:
+                        progress = files_processed / total_files
+                        bar_length = 40
+                        filled = int(bar_length * progress)
+                        
+                        bar = (ui['bar_fill'] * filled) + (ui['bar_empty'] * (bar_length - filled))
+                        percent = int(progress * 100)
 
-                    print(f'\rProgress: [{bar}] {percent}% ({files_processed}/{total_files})', end="", flush=True)
+                        print(f'\rProgress: [{bar}] {percent}% ({files_processed}/{total_files})', end="", flush=True)
+
                     last_print_time = current_time
 
     print(f"\nProcessing complete in {time.time() - start_time:.2f} seconds.")
@@ -369,7 +387,13 @@ def main():
     if excluded_set:
         print(f"Excluding folders: {', '.join(excluded_set)}")
 
-    folder_durations, total_videos, success_count, failed_count = scan_videos_concurrently(root_folder, excluded_set, args.workers, args.fast_start)
+    folder_durations, total_videos, success_count, failed_count = scan_videos_concurrently(
+        root_folder,
+        excluded_set,
+        args.workers,
+        args.fast_start,
+        get_ui()
+    )
 
     if not folder_durations:
         if failed_count > 0:
