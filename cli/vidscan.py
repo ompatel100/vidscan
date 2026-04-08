@@ -23,20 +23,67 @@ MAX_W = 128
 
 def get_ui() -> Dict[str, Any]:
     stdout_encoding = getattr(sys.stdout, 'encoding', '')
-    if stdout_encoding and stdout_encoding.lower() in ['utf-8', 'utf8']:
-        return {
-            'is_terminal': sys.stdout.isatty(),
-            'bar_fill': '█',
-            'bar_empty': '░',
-            'spinner': itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
-        }
+    is_utf8 = stdout_encoding and stdout_encoding.lower() in ['utf-8', 'utf8']
+
+    if is_utf8:
+        bar_fill = '█'
+        bar_empty = '░'
+        spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
     else:
-        return {
-            'is_terminal': sys.stdout.isatty(),
-            'bar_fill': '=',
-            'bar_empty': '-',
-            'spinner': itertools.cycle(['|', '/', '-', '\\'])
-        }
+        bar_fill = '='
+        bar_empty = '-'
+        spinner = ['|', '/', '-', '\\']
+
+    is_terminal = sys.stdout.isatty()
+
+    color = False
+
+    if 'FORCE_COLOR' in os.environ or 'CLICOLOR_FORCE' in os.environ:
+        color = True
+    elif 'NO_COLOR' in os.environ:
+        color = False
+    elif is_terminal and enable_ansi_windows():
+        color = True
+
+    if color:
+        red = '\033[91m'
+        yellow = '\033[93m'
+        green = '\033[92m'
+        cyan = '\033[96m'
+        reset = '\033[0m'
+    else:
+        red = yellow = green = cyan = reset = ''
+
+    return {
+        'is_terminal': is_terminal,
+        'bar_fill': bar_fill,
+        'bar_empty': bar_empty,
+        'spinner': itertools.cycle(spinner),
+        'red': red,
+        'yellow': yellow,
+        'green': green,
+        'cyan': cyan,
+        'reset': reset
+    }
+
+def enable_ansi_windows() -> bool:
+    if os.name != 'nt':
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        
+        if not kernel32.SetConsoleMode(handle, mode.value | 0x0004):
+            return False 
+        
+        return True
+    except Exception:
+        return False
 
 def get_video_duration(file_path: str) -> float:
     try:
@@ -77,13 +124,13 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
     start_time = time.time()
 
     if not fast_start_mode:
-        print("Scanning directory structure...")
+        print(f"{ui['yellow']}Scanning directory structure...{ui['reset']}")
         total_files = sum(1 for _ in stream_video_files(root_folder, excluded_set))
 
         if total_files == 0:
             return folder_data, 0, 0, 0
         
-        print(f"Found {total_files} video files.", end=" ")
+        print(f"Found {ui['cyan']}{total_files}{ui['reset']} video files.", end=" ")
 
     print(f"Processing with {num_workers} workers...")
     
@@ -128,7 +175,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
                 if current_time - last_print_time >= update_interval or files_processed == total_files:
                     if fast_start_mode:
                         spinner = next(ui['spinner'])
-                        print(f'\r[{spinner}] Files processed: {files_processed}', end="", flush=True)
+                        print(f"\r[{spinner}] Files processed: {ui['cyan']}{files_processed}{ui['reset']}", end="", flush=True)
                     else:
                         progress = files_processed / total_files
                         bar_length = 40
@@ -137,7 +184,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
                         bar = (ui['bar_fill'] * filled) + (ui['bar_empty'] * (bar_length - filled))
                         percent = int(progress * 100)
 
-                        print(f'\rProgress: [{bar}] {percent}% ({files_processed}/{total_files})', end="", flush=True)
+                        print(f"\rProgress: [{bar}] {percent}% ({files_processed}/{total_files})", end="", flush=True)
 
                     last_print_time = current_time
 
@@ -359,8 +406,10 @@ def main():
     )
     args = parser.parse_args()
 
+    ui = get_ui()
+
     if not FFPROBE_PATH:
-        print("\nERROR: ffprobe not found in system PATH")
+        print(f"\n{ui['red']}ERROR: ffprobe not found in system PATH{ui['reset']}")
         print("This script requires FFmpeg to work.")
         print("Install FFmpeg from https://ffmpeg.org/download.html and add it to your system's PATH.")
         sys.exit(1)
@@ -373,31 +422,31 @@ def main():
             check=True
         )
     except Exception as e:
-        print(f"ERROR: ffprobe was found, but failed to execute. {e}")
+        print(f"{ui['red']}ERROR: ffprobe was found, but failed to execute. {e}{ui['reset']}")
         sys.exit(1)
 
     root_folder = args.folder_path
     excluded_set = set(args.exclude)
 
     if not os.path.isdir(root_folder):
-        print(f"ERROR: The path '{root_folder}' is not a valid directory.")
+        print(f"{ui['red']}ERROR: The path '{root_folder}' is not a valid directory.{ui['reset']}")
         sys.exit(1)
 
-    print(f"Scanning folder: {root_folder}")
+    print(f"Scanning folder: {ui['cyan']}{root_folder}{ui['reset']}")
     if excluded_set:
-        print(f"Excluding folders: {', '.join(excluded_set)}")
+        print(f"Excluding folders: {ui['cyan']}{', '.join(excluded_set)}{ui['reset']}")
 
     folder_durations, total_videos, success_count, failed_count = scan_videos_concurrently(
         root_folder,
         excluded_set,
         args.workers,
         args.fast_start,
-        get_ui()
+        ui
     )
 
     if not folder_durations:
         if failed_count > 0:
-            print(f"\n[!] NOTE: Found {failed_count} videos, but all of them failed.")
+            print(f"\n{ui['yellow']}[!] NOTE: Found {failed_count} videos, but all of them failed.{ui['reset']}")
         else:
             print(f"\nNo video files found with the configured extensions: {', '.join(sorted(list(VIDEO_EXTENSIONS)))}")
             print("To include other formats, please add them to the VIDEO_EXTENSIONS at the top of the script.")
@@ -425,11 +474,10 @@ def main():
     try:
         if args.format == 'csv':
             write_csv_report(sorted_data, output_path, root_folder, total_videos, success_count, failed_count)
-            print(f"\nSuccess! CSV file saved to:\n{output_path}")
-            
+            print(f"\n{ui['green']}Success! CSV file saved to:{ui['reset']}\n{ui['cyan']}{output_path}{ui['reset']}")
         elif args.format == 'json':
             write_json_report(sorted_data, output_path, total_videos, success_count, failed_count)
-            print(f"\nSuccess! JSON file saved to:\n{output_path}")
+            print(f"\n{ui['green']}Success! JSON file saved to:{ui['reset']}\n{ui['cyan']}{output_path}{ui['reset']}")
             
         else:
             if args.template == 'detailed':
@@ -444,16 +492,16 @@ def main():
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(report_content)
                     
-            print("\n--- File Preview ---")
+            print(f"\n{ui['yellow']}--- File Preview ---{ui['reset']}")
             print(report_content)
 
-            print(f"\nSuccess! Text file saved to:\n{output_path}")
+            print(f"\n{ui['green']}Success! Text file saved to:{ui['reset']}\n{ui['cyan']}{output_path}{ui['reset']}")
 
     except Exception as e:
-        print(f"\nERROR: Could not save the file. Reason: {e}")
+        print(f"\n{ui['red']}ERROR: Could not save the file. Reason: {e}{ui['reset']}")
 
     if failed_count > 0:
-        print(f"\n[!] NOTE: Scanning failed for {failed_count} videos.")
+        print(f"\n{ui['yellow']}[!] NOTE: Scanning failed for {failed_count} videos.{ui['reset']}")
 
 if __name__ == "__main__":
     main()
