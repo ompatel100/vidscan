@@ -200,7 +200,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
 
     return folder_data, total_files, success_count, failed_files_path
 
-def generate_summary_report(sorted_data: List[tuple], failed_count: int) -> List[str]:
+def get_txt_report_summary_lines(sorted_data: List[tuple], failed_count: int) -> List[str]:
     lines = [
         "Video Duration (Summary)", 
         "=" * 40,
@@ -237,7 +237,7 @@ def generate_summary_report(sorted_data: List[tuple], failed_count: int) -> List
 
     return lines
 
-def generate_detailed_report(sorted_data: List[tuple], failed_count: int) -> List[str]:
+def get_txt_report_detailed_lines(sorted_data: List[tuple], failed_count: int) -> List[str]:
     lines = [
         "Video Duration (Detailed)", 
         "=" * 40,
@@ -279,7 +279,7 @@ def generate_detailed_report(sorted_data: List[tuple], failed_count: int) -> Lis
 
     return lines
 
-def generate_failed_videos_report(failed_videos_path: List[str]) -> List[str]:
+def get_failed_videos_report_lines(failed_videos_path: List[str]) -> List[str]:
     lines = [
         "FAILED VIDEO FILES",
         "=" * 40,
@@ -291,7 +291,35 @@ def generate_failed_videos_report(failed_videos_path: List[str]) -> List[str]:
     
     return lines
 
-def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: str, total_videos: int, success_count: int, failed_videos_path: List[str]):
+def write_txt_and_failed_videos_report(sorted_data: List[tuple], output_path: str, template: str, failed_videos_path: List[str], failed_videos_report_path: str, timestamp: datetime.datetime) -> Tuple[str, str]:
+    failed_count = len(failed_videos_path)
+
+    timestamp_str = f"Generated on: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    if template == 'detailed':
+        report_lines = get_txt_report_detailed_lines(sorted_data, failed_count)
+    else:
+        report_lines = get_txt_report_summary_lines(sorted_data, failed_count)
+
+    report_lines.append(timestamp_str)
+    report_content = "\n".join(report_lines)
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(report_content)
+
+    failed_videos_report_content = ""
+
+    if failed_count > 0:
+        failed_videos_report_lines = get_failed_videos_report_lines(failed_videos_path)
+        failed_videos_report_lines.append(timestamp_str)
+        failed_videos_report_content = "\n".join(failed_videos_report_lines)
+        
+        with open(failed_videos_report_path, 'w', encoding='utf-8') as f:
+            f.write(failed_videos_report_content)
+
+    return report_content, failed_videos_report_content
+
+def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: str, total_videos: int, success_count: int, failed_videos_path: List[str], timestamp: datetime.datetime):
     failed_count = len(failed_videos_path)
     
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
@@ -337,8 +365,9 @@ def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: st
         writer.writerow(['Total Videos Discovered', total_videos, '', '', ''])
         writer.writerow(['Successful', success_count, '', '', ''])
         writer.writerow(['Failed', failed_count, '', '', ''])
+        writer.writerow(['Report Generated At', timestamp.strftime('%Y-%m-%d %H:%M:%S')])
 
-def write_json_report(sorted_data: List[tuple], output_path: str, total_videos: int, success_count: int, failed_videos_path: List[str]):
+def write_json_report(sorted_data: List[tuple], output_path: str, total_videos: int, success_count: int, failed_videos_path: List[str], timestamp: datetime.datetime):
     failed_count = len(failed_videos_path)
     total_seconds = sum(info['total_seconds'] for _, info in sorted_data)
     
@@ -361,7 +390,7 @@ def write_json_report(sorted_data: List[tuple], output_path: str, total_videos: 
             "failed_videos": failed_count,
             "total_duration_seconds": round(total_seconds, 2),
             "total_duration_formatted": format_seconds_hms(total_seconds),
-            "generated_at": datetime.datetime.now().isoformat()
+            "generated_at": timestamp.isoformat()
         },
         "failed_files": sorted(failed_videos_path),
         "details": details_list
@@ -508,60 +537,45 @@ def main():
     output_filename = f"{folder_name} - Video Duration.{args.format}"
     output_path = os.path.join(root_folder, output_filename)
     
+    timestamp = datetime.datetime.now()
+
     try:
         if args.format == 'csv':
-            write_csv_report(sorted_data, output_path, root_folder, total_videos, success_count, failed_videos_path)
+            write_csv_report(sorted_data, output_path, root_folder, total_videos, success_count, failed_videos_path, timestamp)
             print(f"\n{ui['green']}Success! CSV file saved to:{ui['reset']}\n{ui['cyan']}{output_path}{ui['reset']}")
             
             if failed_count > 0:
                 print(f"\n{ui['yellow']}[!] NOTE: Scanning failed for {failed_count} videos. Check the 'FAILED' rows in the CSV.{ui['reset']}")
 
         elif args.format == 'json':
-            write_json_report(sorted_data, output_path, total_videos, success_count, failed_videos_path)
+            write_json_report(sorted_data, output_path, total_videos, success_count, failed_videos_path, timestamp)
             print(f"\n{ui['green']}Success! JSON file saved to:{ui['reset']}\n{ui['cyan']}{output_path}{ui['reset']}")
             
             if failed_count > 0:
                 print(f"\n{ui['yellow']}[!] NOTE: Scanning failed for {failed_count} videos. Check the 'failed_files' array in the JSON.{ui['reset']}")
             
         else:
-            if args.template == 'detailed':
-                report_lines = generate_detailed_report(sorted_data, failed_count)
-            else:
-                report_lines = generate_summary_report(sorted_data, failed_count)
-            
-            timestamp = f"Generated on: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            report_lines.append(timestamp)
-            report_content = "\n".join(report_lines)
-            
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(report_content)
-                    
+            failed_videos_report_filename = f"{folder_name} - Failed Videos.txt"
+            failed_videos_report_path = os.path.join(root_folder, failed_videos_report_filename)
+
+            report_content, failed_videos_report_content = write_txt_and_failed_videos_report(
+                sorted_data,
+                output_path,
+                args.template,
+                failed_videos_path,
+                failed_videos_report_path,
+                timestamp
+            )
+
             print(f"\n{ui['yellow']}--- File Preview ---{ui['reset']}")
             print(report_content)
-
             print(f"\n{ui['green']}Success! Text file saved to:{ui['reset']}\n{ui['cyan']}{output_path}{ui['reset']}")
 
             if failed_count > 0:
                 print(f"\n{ui['yellow']}[!] NOTE: Scanning failed for {failed_count} videos.{ui['reset']}")
-                
-                failed_videos_report_filename = f"{folder_name} - Failed Videos.txt"
-                failed_videos_report_path = os.path.join(root_folder, failed_videos_report_filename)
-                
-                try:
-                    failed_videos_report_lines = generate_failed_videos_report(failed_videos_path)
-                    failed_videos_report_lines.append(timestamp)
-                    failed_videos_report_content = "\n".join(failed_videos_report_lines)
-                    
-                    with open(failed_videos_report_path, 'w', encoding='utf-8') as f:
-                        f.write(failed_videos_report_content)
-                    
-                    print(f"\n{ui['yellow']}--- Failed Videos File Preview ---{ui['reset']}")
-                    print(failed_videos_report_content)
-                    
-                    print(f"\n{ui['yellow']}Failed videos file has been saved to:\n{ui['cyan']}{failed_videos_report_path}{ui['reset']}")
-                
-                except Exception as e:
-                    print(f"\n{ui['red']}ERROR: Could not save the failed videos report. Reason: {e}{ui['reset']}")
+                print(f"\n{ui['yellow']}--- Failed Videos File Preview ---{ui['reset']}")
+                print(failed_videos_report_content)
+                print(f"\n{ui['yellow']}Failed videos file has been saved to:\n{ui['cyan']}{failed_videos_report_path}{ui['reset']}")
 
     except Exception as e:
         print(f"\n{ui['red']}ERROR: Could not save the file. Reason: {e}{ui['reset']}")
