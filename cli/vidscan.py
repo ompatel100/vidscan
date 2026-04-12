@@ -85,7 +85,7 @@ def enable_ansi_windows() -> bool:
     except Exception:
         return False
 
-def get_video_duration(file_path: str, ffprobe_timeout: float) -> float:
+def get_video_duration(file_path: str, ffprobe_timeout: float) -> Tuple[float, str]:
     try:
         command = [
             FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
@@ -99,12 +99,15 @@ def get_video_duration(file_path: str, ffprobe_timeout: float) -> float:
             check=True, 
             timeout=ffprobe_timeout
         )
-        return float(result.stdout)
+        return float(result.stdout), ""
         
     except subprocess.TimeoutExpired:
-        return 0.0
-    except Exception:
-        return 0.0
+        return 0.0, f"Process timed out after {ffprobe_timeout} seconds"
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr.strip() if e.stderr else "Corrupted or unreadable file"
+        return 0.0, error_msg
+    except Exception as e:
+        return 0.0, str(e)
 
 def format_seconds_hms(seconds: float) -> str:
     seconds = int(seconds)
@@ -127,7 +130,7 @@ def stream_video_files(root_folder: str, excluded_set: set) -> Iterator[Tuple[st
                     if ext in VIDEO_EXTENSIONS:
                         yield entry.path, entry.stat().st_mtime
 
-def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int, ffprobe_timeout:float, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, List[str]]:
+def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int, ffprobe_timeout:float, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, List[Dict[str, str]]]:
     folder_data: Dict[str, Any] = {}
     total_files = 0
 
@@ -146,7 +149,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
     
     files_processed = 0
     success_count = 0
-    failed_files_path = []
+    failed_videos_data = []
 
     last_print_time = 0.0
     update_interval = 0.1
@@ -160,7 +163,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
 
         for future in concurrent.futures.as_completed(future_to_file):
             file_path, mtime = future_to_file[future]
-            duration = future.result()
+            duration, error_msg = future.result()
             
             files_processed += 1
 
@@ -178,7 +181,10 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
                     'mtime': mtime
                 })
             else:
-                failed_files_path.append(file_path)
+                failed_videos_data.append({
+                    'path': file_path, 
+                    'error': error_msg
+                })
 
             if ui['is_terminal']:
                 current_time = time.time()
@@ -208,7 +214,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
     if fast_start_mode:
         total_files = files_processed 
 
-    return folder_data, total_files, success_count, failed_files_path
+    return folder_data, total_files, success_count, failed_videos_data
 
 def get_txt_report_summary_lines(sorted_data: List[tuple], failed_count: int) -> List[str]:
     lines = [
@@ -289,20 +295,21 @@ def get_txt_report_detailed_lines(sorted_data: List[tuple], failed_count: int) -
 
     return lines
 
-def get_failed_videos_report_lines(failed_videos_path: List[str]) -> List[str]:
+def get_failed_videos_report_lines(failed_videos_data: List[Dict[str, str]]) -> List[str]:
     lines = [
         "FAILED VIDEO FILES",
         "=" * 40,
         "These videos could not be read by ffprobe.",
         ""
     ]
-    for path in sorted(failed_videos_path):
-        lines.append(f"- {path}")
+    for failed_video in sorted(failed_videos_data, key=lambda x: x['path']):
+        lines.append(f"- {failed_video['path']}")
+        lines.append(f"  Reason: {failed_video['error']}\n")
     
     return lines
 
-def write_txt_and_failed_videos_report(sorted_data: List[tuple], output_path: str, template: str, failed_videos_path: List[str], failed_videos_report_path: str, timestamp: datetime.datetime) -> Tuple[str, str]:
-    failed_count = len(failed_videos_path)
+def write_txt_and_failed_videos_report(sorted_data: List[tuple], output_path: str, template: str, failed_videos_data: List[Dict[str, str]], failed_videos_report_path: str, timestamp: datetime.datetime) -> Tuple[str, str]:
+    failed_count = len(failed_videos_data)
 
     timestamp_str = f"Generated on: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
     
@@ -320,7 +327,7 @@ def write_txt_and_failed_videos_report(sorted_data: List[tuple], output_path: st
     failed_videos_report_content = ""
 
     if failed_count > 0:
-        failed_videos_report_lines = get_failed_videos_report_lines(failed_videos_path)
+        failed_videos_report_lines = get_failed_videos_report_lines(failed_videos_data)
         failed_videos_report_lines.append(timestamp_str)
         failed_videos_report_content = "\n".join(failed_videos_report_lines)
         
@@ -329,8 +336,8 @@ def write_txt_and_failed_videos_report(sorted_data: List[tuple], output_path: st
 
     return report_content, failed_videos_report_content
 
-def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: str, total_videos: int, success_count: int, failed_videos_path: List[str], timestamp: datetime.datetime):
-    failed_count = len(failed_videos_path)
+def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: str, total_videos: int, success_count: int, failed_videos_data: List[Dict[str, str]], timestamp: datetime.datetime):
+    failed_count = len(failed_videos_data)
     
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
@@ -354,20 +361,20 @@ def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: st
                 ])
 
         if failed_count > 0:
-            for failed_file_path in sorted(failed_videos_path):
-                folder_path = os.path.dirname(failed_file_path)
+            for failed_video in sorted(failed_videos_data, key=lambda x: x['path']):
+                folder_path = os.path.dirname(failed_video['path'])
                 try:
                     relative_path = os.path.relpath(folder_path, root_folder)
                 except ValueError:
                     relative_path = folder_path
-                file_name = os.path.basename(failed_file_path)
+                file_name = os.path.basename(failed_video['path'])
                 
                 writer.writerow([
                     folder_path,
                     relative_path,
                     file_name,
                     'FAILED',
-                    'FAILED'
+                    failed_video['error']
                 ])
 
         writer.writerow([])
@@ -377,8 +384,7 @@ def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: st
         writer.writerow(['Failed', failed_count, '', '', ''])
         writer.writerow(['Report Generated At', timestamp.strftime('%Y-%m-%d %H:%M:%S')])
 
-def write_json_report(sorted_data: List[tuple], output_path: str, total_videos: int, success_count: int, failed_videos_path: List[str], timestamp: datetime.datetime):
-    failed_count = len(failed_videos_path)
+def write_json_report(sorted_data: List[tuple], output_path: str, total_videos: int, success_count: int, failed_videos_data: List[Dict[str, str]], timestamp: datetime.datetime):
     total_seconds = sum(info['total_seconds'] for _, info in sorted_data)
     
     details_list = []
@@ -397,13 +403,13 @@ def write_json_report(sorted_data: List[tuple], output_path: str, total_videos: 
             "total_folders": len(sorted_data),
             "total_videos_discovered": total_videos,
             "successful_videos": success_count,
-            "failed_videos": failed_count,
+            "failed_videos_count": len(failed_videos_data),
             "total_duration_seconds": round(total_seconds, 2),
             "total_duration_formatted": format_seconds_hms(total_seconds),
             "generated_at": timestamp.isoformat()
         },
-        "failed_files": sorted(failed_videos_path),
-        "details": details_list
+        "details": details_list,
+        "failed_videos": sorted(failed_videos_data, key=lambda x: x['path']),
     }
 
     with open(output_path, 'w', encoding='utf-8') as f:
@@ -517,7 +523,7 @@ def main():
     if excluded_set:
         print(f"Excluding folders: {ui['cyan']}{', '.join(excluded_set)}{ui['reset']}")
 
-    folder_durations, total_videos, success_count, failed_videos_path = scan_videos_concurrently(
+    folder_durations, total_videos, success_count, failed_videos_data = scan_videos_concurrently(
         root_folder,
         excluded_set,
         args.workers,
@@ -526,7 +532,7 @@ def main():
         ui
     )
 
-    failed_count = len(failed_videos_path)
+    failed_count = len(failed_videos_data)
 
     if not folder_durations:
         if failed_count > 0:
@@ -559,14 +565,14 @@ def main():
 
     try:
         if args.format == 'csv':
-            write_csv_report(sorted_data, output_path, root_folder, total_videos, success_count, failed_videos_path, timestamp)
+            write_csv_report(sorted_data, output_path, root_folder, total_videos, success_count, failed_videos_data, timestamp)
             print(f"\n{ui['green']}Success! CSV file saved to:{ui['reset']}\n{ui['cyan']}{output_path}{ui['reset']}")
             
             if failed_count > 0:
                 print(f"\n{ui['yellow']}[!] NOTE: Scanning failed for {failed_count} videos. Check the 'FAILED' rows in the CSV.{ui['reset']}")
 
         elif args.format == 'json':
-            write_json_report(sorted_data, output_path, total_videos, success_count, failed_videos_path, timestamp)
+            write_json_report(sorted_data, output_path, total_videos, success_count, failed_videos_data, timestamp)
             print(f"\n{ui['green']}Success! JSON file saved to:{ui['reset']}\n{ui['cyan']}{output_path}{ui['reset']}")
             
             if failed_count > 0:
@@ -580,7 +586,7 @@ def main():
                 sorted_data,
                 output_path,
                 args.template,
-                failed_videos_path,
+                failed_videos_data,
                 failed_videos_report_path,
                 timestamp
             )
