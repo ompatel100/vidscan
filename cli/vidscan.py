@@ -457,7 +457,7 @@ def main():
     )
     parser.add_argument(
         "-f", "--format",
-        choices=['txt', 'csv', 'json'],
+        choices=['txt', 'csv', 'json', 'all'],
         default='txt',
         help="Output file format (default: txt).")
     parser.add_argument(
@@ -558,34 +558,43 @@ def main():
     )
     
     folder_name = os.path.basename(os.path.normpath(root_folder))
-    output_filename = f"{folder_name} - Video Duration.{args.format}"
-    output_path = os.path.join(root_folder, output_filename)
-    
     timestamp = datetime.datetime.now()
+    report_format = args.format
 
     try:
-        if args.format == 'csv':
-            write_csv_report(sorted_data, output_path, root_folder, total_videos, success_count, failed_videos_data, timestamp)
-            print(f"\n{ui['green']}Success! CSV file saved to:{ui['reset']}\n{ui['cyan']}{output_path}{ui['reset']}")
+        if report_format in ['csv', 'all']:
+            csv_output_filename = f"{folder_name}_video_duration.csv"
+            csv_output_path = os.path.join(root_folder, csv_output_filename)
+
+            write_csv_report(sorted_data, csv_output_path, root_folder, total_videos, success_count, failed_videos_data, timestamp)
+            print(f"\n{ui['green']}Success! CSV file saved to:{ui['reset']}\n{ui['cyan']}{csv_output_path}{ui['reset']}")
             
-            if failed_count > 0:
+            if failed_count > 0 and report_format != 'all':
                 print(f"\n{ui['yellow']}[!] NOTE: Scanning failed for {failed_count} videos. Check the 'FAILED' rows in the CSV.{ui['reset']}")
 
-        elif args.format == 'json':
-            write_json_report(sorted_data, output_path, total_videos, success_count, failed_videos_data, timestamp)
-            print(f"\n{ui['green']}Success! JSON file saved to:{ui['reset']}\n{ui['cyan']}{output_path}{ui['reset']}")
+        if report_format in ['json', 'all']:
+            json_output_filename = f"{folder_name}_video_duration.json"
+            json_output_path = os.path.join(root_folder, json_output_filename)
+
+            write_json_report(sorted_data, json_output_path, total_videos, success_count, failed_videos_data, timestamp)
+            print(f"\n{ui['green']}Success! JSON file saved to:{ui['reset']}\n{ui['cyan']}{json_output_path}{ui['reset']}")
             
-            if failed_count > 0:
+            if failed_count > 0 and report_format != 'all':
                 print(f"\n{ui['yellow']}[!] NOTE: Scanning failed for {failed_count} videos. Check the 'failed_files' array in the JSON.{ui['reset']}")
             
-        else:
+        if report_format in ['txt', 'all']:
+            txt_output_filename = f"{folder_name} - Video Duration.txt"
+            txt_output_path = os.path.join(root_folder, txt_output_filename)
+
             failed_videos_report_filename = f"{folder_name} - Failed Videos.txt"
             failed_videos_report_path = os.path.join(root_folder, failed_videos_report_filename)
 
+            txt_report_template = 'detailed' if report_format == 'all' else args.template
+
             report_content, failed_videos_report_content = write_txt_and_failed_videos_report(
                 sorted_data,
-                output_path,
-                args.template,
+                txt_output_path,
+                txt_report_template,
                 failed_videos_data,
                 failed_videos_report_path,
                 timestamp
@@ -593,13 +602,18 @@ def main():
 
             print(f"\n{ui['yellow']}--- File Preview ---{ui['reset']}")
             print(report_content)
-            print(f"\n{ui['green']}Success! Text file saved to:{ui['reset']}\n{ui['cyan']}{output_path}{ui['reset']}")
+            print(f"\n{ui['green']}Success! Text file saved to:{ui['reset']}\n{ui['cyan']}{txt_output_path}{ui['reset']}")
 
             if failed_count > 0:
                 print(f"\n{ui['yellow']}[!] NOTE: Scanning failed for {failed_count} videos.{ui['reset']}")
                 print(f"\n{ui['yellow']}--- Failed Videos File Preview ---{ui['reset']}")
                 print(failed_videos_report_content)
                 print(f"\n{ui['yellow']}Failed videos file has been saved to:\n{ui['cyan']}{failed_videos_report_path}{ui['reset']}")
+
+                if report_format == 'all':
+                    print(f"\n{ui['yellow']}Failed videos and error messages can be found here in csv, json:{ui['reset']}")
+                    print(f"{ui['yellow']}-'FAILED' rows in CSV.{ui['reset']}")
+                    print(f"{ui['yellow']}-'failed_files' array in JSON.{ui['reset']}")
 
     except Exception as e:
         print(f"\n{ui['red']}ERROR: Could not save the file. Reason: {e}{ui['reset']}")
