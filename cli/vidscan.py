@@ -85,14 +85,24 @@ def enable_ansi_windows() -> bool:
     except Exception:
         return False
 
-def get_video_duration(file_path: str) -> float:
+def get_video_duration(file_path: str, ffprobe_timeout: float) -> float:
     try:
         command = [
             FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", file_path
         ]
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
+
+        result = subprocess.run(
+            command, 
+            capture_output=True, 
+            text=True, 
+            check=True, 
+            timeout=ffprobe_timeout
+        )
         return float(result.stdout)
+        
+    except subprocess.TimeoutExpired:
+        return 0.0
     except Exception:
         return 0.0
 
@@ -117,7 +127,7 @@ def stream_video_files(root_folder: str, excluded_set: set) -> Iterator[Tuple[st
                     if ext in VIDEO_EXTENSIONS:
                         yield entry.path, entry.stat().st_mtime
 
-def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, List[str]]:
+def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int, ffprobe_timeout:float, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, List[str]]:
     folder_data: Dict[str, Any] = {}
     total_files = 0
 
@@ -145,7 +155,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
         future_to_file = {}
 
         for file_path, mtime in stream_video_files(root_folder, excluded_set):
-            future = executor.submit(get_video_duration, file_path)
+            future = executor.submit(get_video_duration, file_path, ffprobe_timeout)
             future_to_file[future] = (file_path, mtime)
 
         for future in concurrent.futures.as_completed(future_to_file):
@@ -468,6 +478,13 @@ def main():
         help="Directly start processing (Recommended for network drives).\n"
             "Note: Only processed count will be displayed, not progress bar."
     )
+    parser.add_argument(
+        "--ffprobe-timeout",
+        type=float,
+        default=15.0,
+        help="Maximum seconds to wait for a video before marking as failed (default: 15.0).\n"
+            "Increase this for slow network drives."
+    )
     args = parser.parse_args()
 
     ui = get_ui()
@@ -504,6 +521,7 @@ def main():
         root_folder,
         excluded_set,
         args.workers,
+        args.ffprobe_timeout,
         args.fast_start,
         ui
     )
