@@ -11,15 +11,13 @@ import json
 import datetime
 from typing import Dict, Iterator, List, Any, Tuple
 
-# --- USER CONFIGURATION ---
-# File extensions that you want to scan
-VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'}
-
-FFPROBE_PATH = shutil.which('ffprobe')
+DEFAULT_VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.webm', '.mov', '.m4v',  '.avi', '.wmv', '.flv', '.mpg', '.mpeg'}
 
 DEFAULT_W = min(4, os.cpu_count() or 1)
 DEFAULT_W_SSD = min(32, os.cpu_count() or 1)
 MAX_W = 128
+
+FFPROBE_PATH = shutil.which('ffprobe')
 
 def get_ui() -> Dict[str, Any]:
     stdout_encoding = getattr(sys.stdout, 'encoding', '')
@@ -130,21 +128,21 @@ def format_bytes(size_bytes: int) -> str:
 
     return f"{size_units:.2f} {units[unit_idx]}"
 
-def stream_video_files(root_folder: str, excluded_set: set) -> Iterator[Tuple[str, float, int]]:
+def stream_video_files(root_folder: str, video_extensions: set, excluded_folders: set) -> Iterator[Tuple[str, float, int]]:
     stack = [root_folder]
     while stack:
         current_dir = stack.pop()
         with os.scandir(current_dir) as entries:
             for entry in entries:
                 if entry.is_dir(follow_symlinks=False):
-                    if entry.name not in excluded_set:
+                    if entry.name not in excluded_folders:
                         stack.append(entry.path)
                 elif entry.is_file(follow_symlinks=False):
                     ext = os.path.splitext(entry.name)[1].lower()
-                    if ext in VIDEO_EXTENSIONS:
+                    if ext in video_extensions:
                         yield entry.path, entry.stat().st_mtime, entry.stat().st_size
 
-def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int, ffprobe_timeout:float, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, List[Dict[str, Any]]]:
+def scan_videos_concurrently(root_folder: str, video_extensions: set, excluded_folders: set, num_workers: int, ffprobe_timeout:float, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, List[Dict[str, Any]]]:
     folder_data: Dict[str, Any] = {}
     total_videos = 0
 
@@ -152,7 +150,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
 
     if not fast_start_mode:
         print(f"{ui['yellow']}Scanning directory structure...{ui['reset']}")
-        total_videos = sum(1 for _ in stream_video_files(root_folder, excluded_set))
+        total_videos = sum(1 for _ in stream_video_files(root_folder, video_extensions, excluded_folders))
 
         if total_videos == 0:
             return folder_data, 0, 0, []
@@ -171,7 +169,7 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
         future_to_video = {}
 
-        for video_path, mtime, size in stream_video_files(root_folder, excluded_set):
+        for video_path, mtime, size in stream_video_files(root_folder, video_extensions, excluded_folders):
             future = executor.submit(get_video_duration, video_path, ffprobe_timeout)
             future_to_video[future] = (video_path, mtime, size)
 
@@ -538,7 +536,15 @@ def main():
         "-e", "--exclude",
         nargs='+',
         default=[],
-        help="A space separated list of folder names to exclude from the scan (case sensitive)."
+        help="Space separated list of folder names to exclude from the scan (case sensitive)."
+    )
+    parser.add_argument(
+        "-ext", "--extensions",
+        nargs='+',
+        help=(
+            "Space separated list of file extensions to scan (e.g. mp4 mkv webm).\n"
+            f"(default: {DEFAULT_VIDEO_EXTENSIONS})."
+        )
     )
     parser.add_argument(
         "-w", "--workers",
@@ -614,19 +620,25 @@ def main():
         sys.exit(1)
 
     root_folder = args.folder_path
-    excluded_set = set(args.exclude)
+    excluded_folders = set(args.exclude)
+
+    if args.extensions:
+        video_extensions = {ext.lower() if ext.startswith('.') else f'.{ext.lower()}' for ext in args.extensions}
+    else:
+        video_extensions = DEFAULT_VIDEO_EXTENSIONS
 
     if not os.path.isdir(root_folder):
         print(f"{ui['red']}ERROR: The path '{root_folder}' is not a valid directory.{ui['reset']}")
         sys.exit(1)
 
     print(f"Scanning folder: {ui['cyan']}{root_folder}{ui['reset']}")
-    if excluded_set:
-        print(f"Excluding folders: {ui['cyan']}{', '.join(excluded_set)}{ui['reset']}")
+    if excluded_folders:
+        print(f"Excluding folders: {ui['cyan']}{', '.join(excluded_folders)}{ui['reset']}")
 
     folder_durations, total_videos, success_count, failed_videos_data = scan_videos_concurrently(
         root_folder,
-        excluded_set,
+        video_extensions,
+        excluded_folders,
         args.workers,
         args.ffprobe_timeout,
         args.fast_start,
@@ -639,8 +651,9 @@ def main():
         if failed_count > 0:
             print(f"\n{ui['yellow']}[!] NOTE: Found {failed_count} videos, but all of them failed.{ui['reset']}")
         else:
-            print(f"\nNo video files found with the configured extensions: {', '.join(sorted(list(VIDEO_EXTENSIONS)))}")
-            print("To include other formats, please add them to the VIDEO_EXTENSIONS at the top of the script.")
+            print(f"\n{ui['yellow']}No video files found with the default extensions: {ui['cyan']}{', '.join(sorted(list(DEFAULT_VIDEO_EXTENSIONS)))}{ui['reset']}")
+            print(f"To include other formats, or scan for specific formats only, please provide them in {ui['cyan']}--extensions{ui['reset']} flag.")
+            print(f"You can also change {ui['cyan']}DEFAULT_VIDEO_EXTENSIONS{ui['reset']} at the top of the script permanently.")
         sys.exit(0)
 
     sort_key_func = {
