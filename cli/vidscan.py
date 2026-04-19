@@ -85,11 +85,11 @@ def enable_ansi_windows() -> bool:
     except Exception:
         return False
 
-def get_video_duration(file_path: str, ffprobe_timeout: float) -> Tuple[float, str]:
+def get_video_duration(video_path: str, ffprobe_timeout: float) -> Tuple[float, str]:
     try:
         command = [
             FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", file_path
+            "-of", "default=noprint_wrappers=1:nokey=1", video_path
         ]
 
         result = subprocess.run(
@@ -114,9 +114,23 @@ def format_seconds_hms(seconds: float) -> str:
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
     secs = seconds % 60
-    return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
-def stream_video_files(root_folder: str, excluded_set: set) -> Iterator[Tuple[str, float]]:
+def format_bytes(size_bytes: int) -> str:
+    if size_bytes == 0:
+        return "0 B"
+    
+    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+
+    size_units = size_bytes
+    unit_idx = 0
+    while size_units >= 1024 and unit_idx < len(units) - 1:
+        size_units /= 1024.0
+        unit_idx += 1
+
+    return f"{size_units:.2f} {units[unit_idx]}"
+
+def stream_video_files(root_folder: str, excluded_set: set) -> Iterator[Tuple[str, float, int]]:
     stack = [root_folder]
     while stack:
         current_dir = stack.pop()
@@ -128,26 +142,26 @@ def stream_video_files(root_folder: str, excluded_set: set) -> Iterator[Tuple[st
                 elif entry.is_file(follow_symlinks=False):
                     ext = os.path.splitext(entry.name)[1].lower()
                     if ext in VIDEO_EXTENSIONS:
-                        yield entry.path, entry.stat().st_mtime
+                        yield entry.path, entry.stat().st_mtime, entry.stat().st_size
 
-def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int, ffprobe_timeout:float, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, List[Dict[str, str]]]:
+def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: int, ffprobe_timeout:float, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, List[Dict[str, Any]]]:
     folder_data: Dict[str, Any] = {}
-    total_files = 0
+    total_videos = 0
 
     start_time = time.time()
 
     if not fast_start_mode:
         print(f"{ui['yellow']}Scanning directory structure...{ui['reset']}")
-        total_files = sum(1 for _ in stream_video_files(root_folder, excluded_set))
+        total_videos = sum(1 for _ in stream_video_files(root_folder, excluded_set))
 
-        if total_files == 0:
+        if total_videos == 0:
             return folder_data, 0, 0, []
         
-        print(f"Found {ui['cyan']}{total_files}{ui['reset']} video files.", end=" ")
+        print(f"Found {ui['cyan']}{total_videos}{ui['reset']} video files.", end=" ")
 
     print(f"Processing with {num_workers} workers...")
     
-    files_processed = 0
+    videos_processed = 0
     success_count = 0
     failed_videos_data = []
 
@@ -155,94 +169,108 @@ def scan_videos_concurrently(root_folder: str, excluded_set: set, num_workers: i
     update_interval = 0.1
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        future_to_file = {}
+        future_to_video = {}
 
-        for file_path, mtime in stream_video_files(root_folder, excluded_set):
-            future = executor.submit(get_video_duration, file_path, ffprobe_timeout)
-            future_to_file[future] = (file_path, mtime)
+        for video_path, mtime, size in stream_video_files(root_folder, excluded_set):
+            future = executor.submit(get_video_duration, video_path, ffprobe_timeout)
+            future_to_video[future] = (video_path, mtime, size)
 
-        for future in concurrent.futures.as_completed(future_to_file):
-            file_path, mtime = future_to_file[future]
+        for future in concurrent.futures.as_completed(future_to_video):
+            video_path, mtime, size = future_to_video[future]
             duration, error_msg = future.result()
             
-            files_processed += 1
+            videos_processed += 1
 
             if duration > 0:
                 success_count += 1
-                dirpath = os.path.dirname(file_path)
-                filename = os.path.basename(file_path)
+                dirpath = os.path.dirname(video_path)
+                filename = os.path.basename(video_path)
                 
                 if dirpath not in folder_data:
-                    folder_data[dirpath] = {'files': []}
+                    folder_data[dirpath] = {'videos': []}
                 
-                folder_data[dirpath]['files'].append({
+                folder_data[dirpath]['videos'].append({
                     'name': filename, 
                     'duration': duration, 
-                    'mtime': mtime
+                    'mtime': mtime,
+                    'size': size
                 })
             else:
                 failed_videos_data.append({
-                    'path': file_path, 
-                    'error': error_msg
+                    'path': video_path, 
+                    'error': error_msg,
+                    'size': size
                 })
 
             if ui['is_terminal']:
                 current_time = time.time()
-                if current_time - last_print_time >= update_interval or files_processed == total_files:
+                if current_time - last_print_time >= update_interval or videos_processed == total_videos:
                     if fast_start_mode:
                         spinner = next(ui['spinner'])
-                        print(f"\r[{spinner}] Files processed: {ui['cyan']}{files_processed}{ui['reset']}", end="", flush=True)
+                        print(f"\r[{spinner}] Videos processed: {ui['cyan']}{videos_processed}{ui['reset']}", end="", flush=True)
                     else:
-                        progress = files_processed / total_files
+                        progress = videos_processed / total_videos
                         bar_length = 40
                         filled = int(bar_length * progress)
                         
                         bar = (ui['bar_fill'] * filled) + (ui['bar_empty'] * (bar_length - filled))
                         percent = int(progress * 100)
 
-                        print(f"\rProgress: [{bar}] {percent}% ({files_processed}/{total_files})", end="", flush=True)
+                        print(f"\rProgress: [{bar}] {percent}% ({videos_processed}/{total_videos})", end="", flush=True)
 
                     last_print_time = current_time
 
     print(f"\nProcessing complete in {time.time() - start_time:.2f} seconds.")
 
     for info in folder_data.values():
-        info['total_seconds'] = sum(f['duration'] for f in info['files'])
-        info['video_count'] = len(info['files'])
-        info['last_modified'] = max(f['mtime'] for f in info['files'])
+        info['total_seconds'] = sum(vid['duration'] for vid in info['videos'])
+        info['total_size'] = sum(vid['size'] for vid in info['videos'])
+        info['video_count'] = len(info['videos'])
+        info['last_modified'] = max(vid['mtime'] for vid in info['videos'])
 
     if fast_start_mode:
-        total_files = files_processed 
+        total_videos = videos_processed 
 
-    return folder_data, total_files, success_count, failed_videos_data
+    return folder_data, total_videos, success_count, failed_videos_data
 
-def get_txt_report_summary_lines(sorted_data: List[tuple], failed_count: int) -> List[str]:
+def get_txt_report_summary_lines(sorted_data: List[tuple], failed_count: int, include_size: bool) -> List[str]:
+    divide_line_length = 60 if include_size else 45
+
     lines = [
         "Video Duration (Summary)", 
-        "=" * 40,
+        "=" * divide_line_length,
         ""
     ]
     
     grand_total_seconds = 0.0
+    grand_total_vid_size = 0
     grand_total_videos = 0
 
     for folder_path, info in sorted_data:
         folder_name = os.path.basename(folder_path) or os.path.basename(os.path.normpath(folder_path))
 
         lines.append(f"Folder: {folder_name}")
-        lines.append(f"  -> Videos: {info['video_count']:>3} | Duration: {format_seconds_hms(info['total_seconds'])}")
-        lines.append("-" * 40)
+
+        size_str = f" | Size: {format_bytes(info['total_size'])}" if include_size else ""
+        lines.append(f"  -> Videos: {info['video_count']:>3} | Duration: {format_seconds_hms(info['total_seconds'])}{size_str}")
+        lines.append("-" * divide_line_length)
         
         grand_total_seconds += info['total_seconds']
+        grand_total_vid_size += info['total_size']
         grand_total_videos += info['video_count']
     
-    lines.extend([
+    totals_lines = [
         "\nTOTALS",
         f"  -> Total Folders: {len(sorted_data)}",
         f"  -> Total Videos: {grand_total_videos}",
-        f"  -> Total Duration: {format_seconds_hms(grand_total_seconds)}",
-        "=" * 40
-    ])
+        f"  -> Total Duration: {format_seconds_hms(grand_total_seconds)}"
+    ]
+    
+    if include_size:
+        totals_lines.append(f"  -> Total Videos Size: {format_bytes(grand_total_vid_size)}")
+        
+    totals_lines.append("=" * divide_line_length)
+    lines.extend(totals_lines)
 
     if failed_count > 0:
         lines.extend([
@@ -253,38 +281,50 @@ def get_txt_report_summary_lines(sorted_data: List[tuple], failed_count: int) ->
 
     return lines
 
-def get_txt_report_detailed_lines(sorted_data: List[tuple], failed_count: int) -> List[str]:
+def get_txt_report_detailed_lines(sorted_data: List[tuple], failed_count: int, include_size: bool) -> List[str]:
+    divide_line_length = 75 if include_size else 60
+
     lines = [
         "Video Duration (Detailed)", 
-        "=" * 40,
+        "=" * divide_line_length,
         ""
     ]
     
     grand_total_seconds = 0.0
+    grand_total_vid_size = 0
     grand_total_videos = 0
 
     for folder_path, info in sorted_data:
         folder_name = os.path.basename(folder_path) or os.path.basename(os.path.normpath(folder_path))
 
         lines.append(f"Folder: {folder_name}")
-        lines.append(f"  [ Videos: {info['video_count']:>3} | Subtotal: {format_seconds_hms(info['total_seconds'])} ]")
         
-        sorted_files = sorted(info['files'], key=lambda x: x['name'])
-        for file_info in sorted_files:
-            lines.append(f"    - {file_info['name']} ({format_seconds_hms(file_info['duration'])})")
+        sub_total_size_str = f" | Subtotal Size: {format_bytes(info['total_size'])}" if include_size else ""
+        lines.append(f"  [ Videos: {info['video_count']:>3} | Subtotal Duration: {format_seconds_hms(info['total_seconds'])}{sub_total_size_str} ]")
+        
+        sorted_videos = sorted(info['videos'], key=lambda x: x['name'])
+        for vid_info in sorted_videos:
+            size_str = f" | {format_bytes(vid_info['size'])}" if include_size else ""
+            lines.append(f"    - {vid_info['name']} ({format_seconds_hms(vid_info['duration'])}{size_str})")
             
-        lines.append("-" * 40)
+        lines.append("-" * divide_line_length)
         
         grand_total_seconds += info['total_seconds']
+        grand_total_vid_size += info['total_size']
         grand_total_videos += info['video_count']
     
-    lines.extend([
+    totals_lines = [
         "\nGRAND TOTAL",
         f"  -> Total Folders: {len(sorted_data)}",
         f"  -> Total Videos: {grand_total_videos}",
-        f"  -> Total Duration: {format_seconds_hms(grand_total_seconds)}",
-        "=" * 40
-    ])
+        f"  -> Total Duration: {format_seconds_hms(grand_total_seconds)}"
+    ]
+    
+    if include_size:
+        totals_lines.append(f"  -> Total Videos Size: {format_bytes(grand_total_vid_size)}")
+    
+    totals_lines.append("=" * divide_line_length)
+    lines.extend(totals_lines)
 
     if failed_count > 0:
         lines.extend([
@@ -295,28 +335,45 @@ def get_txt_report_detailed_lines(sorted_data: List[tuple], failed_count: int) -
 
     return lines
 
-def get_failed_videos_report_lines(failed_videos_data: List[Dict[str, str]]) -> List[str]:
+def get_failed_videos_report_lines(failed_videos_data: List[Dict[str, Any]]) -> List[str]:
+    divide_line_length = 60
+
     lines = [
         "FAILED VIDEO FILES",
-        "=" * 40,
+        "=" * divide_line_length,
         "These videos could not be read by ffprobe.",
         ""
     ]
+
+    total_failed_vid_size = 0
+
     for failed_video in sorted(failed_videos_data, key=lambda x: x['path']):
         lines.append(f"- {failed_video['path']}")
-        lines.append(f"  Reason: {failed_video['error']}\n")
+        lines.append(f"  Reason: {failed_video['error']}")
+        lines.append(f"  Size: {format_bytes(failed_video['size'])}\n")
+
+        total_failed_vid_size += failed_video['size']
+
+    totals_lines = [
+        "\nTOTALS",
+        f"  -> Total Failed Videos: {len(failed_videos_data)}",
+        f"  -> Total Size: {format_bytes(total_failed_vid_size)}"
+    ]
+
+    totals_lines.append("=" * divide_line_length)
+    lines.extend(totals_lines)
     
     return lines
 
-def write_txt_and_failed_videos_report(sorted_data: List[tuple], output_path: str, template: str, failed_videos_data: List[Dict[str, str]], failed_videos_report_path: str, timestamp: datetime.datetime) -> Tuple[str, str]:
+def write_txt_and_failed_videos_report(sorted_data: List[tuple], output_path: str, template: str, failed_videos_data: List[Dict[str, Any]], failed_videos_report_path: str, timestamp: datetime.datetime, include_size: bool) -> Tuple[str, str]:
     failed_count = len(failed_videos_data)
 
     timestamp_str = f"Generated on: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
     
     if template == 'detailed':
-        report_lines = get_txt_report_detailed_lines(sorted_data, failed_count)
+        report_lines = get_txt_report_detailed_lines(sorted_data, failed_count, include_size)
     else:
-        report_lines = get_txt_report_summary_lines(sorted_data, failed_count)
+        report_lines = get_txt_report_summary_lines(sorted_data, failed_count, include_size)
 
     report_lines.append(timestamp_str)
     report_content = "\n".join(report_lines)
@@ -336,31 +393,35 @@ def write_txt_and_failed_videos_report(sorted_data: List[tuple], output_path: st
 
     return report_content, failed_videos_report_content
 
-def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: str, total_videos: int, success_count: int, failed_videos_data: List[Dict[str, str]], timestamp: datetime.datetime):
-    failed_count = len(failed_videos_data)
-    
+def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: str, total_videos: int, success_count: int, failed_videos_data: List[Dict[str, Any]], timestamp: datetime.datetime):
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['Folder Path', 'Relative Path', 'File Name', 'Duration (Seconds)', 'Duration (Formatted)'])
+        writer.writerow(['Folder Path', 'Relative Path', 'File Name', 'Duration (Seconds)', 'Duration (Formatted)', 'Size (Bytes)', 'Size (Formatted)'])
         
+        total_vid_size_successful = 0
         for folder_path, info in sorted_data:
             try:
                 relative_path = os.path.relpath(folder_path, root_folder)
             except ValueError:
                 relative_path = folder_path
                 
-            sorted_files = sorted(info['files'], key=lambda x: x['name'])
+            sorted_videos = sorted(info['videos'], key=lambda x: x['name'])
             
-            for file_info in sorted_files:
+            for vid_info in sorted_videos:
                 writer.writerow([
                     folder_path,
                     relative_path,
-                    file_info['name'],
-                    f"{file_info['duration']:.2f}",
-                    format_seconds_hms(file_info['duration'])
+                    vid_info['name'],
+                    f"{vid_info['duration']:.2f}",
+                    format_seconds_hms(vid_info['duration']),
+                    vid_info['size'],
+                    format_bytes(vid_info['size'])
                 ])
 
-        if failed_count > 0:
+            total_vid_size_successful += info['total_size']
+
+        total_vid_size_failed = 0
+        if failed_videos_data:
             for failed_video in sorted(failed_videos_data, key=lambda x: x['path']):
                 folder_path = os.path.dirname(failed_video['path'])
                 try:
@@ -374,29 +435,58 @@ def write_csv_report(sorted_data: List[tuple], output_path: str, root_folder: st
                     relative_path,
                     file_name,
                     'FAILED',
-                    failed_video['error']
+                    failed_video['error'],
+                    failed_video['size'],
+                    format_bytes(failed_video['size'])
                 ])
 
-        writer.writerow([])
-        writer.writerow(['--- SCAN SUMMARY ---', '', '', '', ''])
-        writer.writerow(['Total Videos Discovered', total_videos, '', '', ''])
-        writer.writerow(['Successful', success_count, '', '', ''])
-        writer.writerow(['Failed', failed_count, '', '', ''])
-        writer.writerow(['Report Generated At', timestamp.strftime('%Y-%m-%d %H:%M:%S')])
+                total_vid_size_failed += failed_video['size']
 
-def write_json_report(sorted_data: List[tuple], output_path: str, total_videos: int, success_count: int, failed_videos_data: List[Dict[str, str]], timestamp: datetime.datetime):
-    total_seconds = sum(info['total_seconds'] for _, info in sorted_data)
-    
+        writer.writerow([])
+        writer.writerow(['--- SCAN SUMMARY ---', '', '', '', '', '', ''])
+        writer.writerow(['Total Videos Discovered', total_videos, '', '', '', '', ''])
+        writer.writerow(['Successful', success_count, '', '', '', '', ''])
+        writer.writerow(['Failed', len(failed_videos_data), '', '', '', '', ''])
+        writer.writerow(['Total Size (Successful Videos)', total_vid_size_successful, format_bytes(total_vid_size_successful), '', '', '', ''])
+        writer.writerow(['Total Size (Failed Videos)', total_vid_size_failed, format_bytes(total_vid_size_failed), '', '', '', ''])
+        writer.writerow(['Total Size (All Videos)', total_vid_size_successful + total_vid_size_failed, format_bytes(total_vid_size_successful + total_vid_size_failed), '', '', '', ''])
+        writer.writerow(['Report Generated At', timestamp.strftime('%Y-%m-%d %H:%M:%S'), '', '', '', '', ''])
+
+def write_json_report(sorted_data: List[tuple], output_path: str, total_videos: int, success_count: int, failed_videos_data: List[Dict[str, Any]], timestamp: datetime.datetime):
+    total_vid_size_successful = 0
+    total_seconds = 0
     details_list = []
     for folder_path, info in sorted_data:
+        videos_formatted = []
+        for video_data in sorted(info['videos'], key=lambda x: x['name']):
+            video_data_copy = dict(video_data)
+            video_data_copy['size_formatted'] = format_bytes(video_data['size'])
+            video_data_copy['duration_formatted'] = format_seconds_hms(video_data['duration'])
+            videos_formatted.append(video_data_copy)
+        
+        total_seconds += info['total_seconds']
+        total_vid_size_successful += info['total_size']
+
         details_list.append({
             "folder_path": folder_path,
             "video_count": info['video_count'],
             "total_seconds": info['total_seconds'],
+            "total_duration_formatted": format_seconds_hms(info['total_seconds']),
+            "total_videos_size_bytes": info['total_size'],
+            "total_videos_size_formatted": format_bytes(info['total_size']),
             "last_modified_timestamp": info['last_modified'],
             "last_modified_human": datetime.datetime.fromtimestamp(info['last_modified']).isoformat(),
-            "files": sorted(info['files'], key=lambda x: x['name'])
+            "videos": videos_formatted
         })
+    
+    total_vid_size_failed = 0
+    failed_videos_formatted = []
+    for failed_video in sorted(failed_videos_data, key=lambda x: x['path']):
+        failed_video_copy = dict(failed_video)
+        failed_video_copy['size_formatted'] = format_bytes(failed_video['size'])
+        failed_videos_formatted.append(failed_video_copy)
+        
+        total_vid_size_failed += failed_video['size']
 
     report_structure = {
         "summary": {
@@ -406,10 +496,16 @@ def write_json_report(sorted_data: List[tuple], output_path: str, total_videos: 
             "failed_videos_count": len(failed_videos_data),
             "total_duration_seconds": round(total_seconds, 2),
             "total_duration_formatted": format_seconds_hms(total_seconds),
+            "total_successful_videos_size_bytes": total_vid_size_successful,
+            "total_successful_videos_size_formatted": format_bytes(total_vid_size_successful),
+            "total_failed_videos_size_bytes": total_vid_size_failed,
+            "total_failed_videos_size_formatted": format_bytes(total_vid_size_failed),
+            "total_videos_size_bytes": total_vid_size_successful + total_vid_size_failed,
+            "total_videos_size_formatted": format_bytes(total_vid_size_successful + total_vid_size_failed),
             "generated_at": timestamp.isoformat()
         },
         "details": details_list,
-        "failed_videos": sorted(failed_videos_data, key=lambda x: x['path']),
+        "failed_videos": failed_videos_formatted,
     }
 
     with open(output_path, 'w', encoding='utf-8') as f:
@@ -465,6 +561,11 @@ def main():
         choices=['summary', 'detailed'], 
         default='summary',
         help="Text report template (default: summary)."
+    )
+    parser.add_argument(
+        "--include-size-txt",
+        action="store_true",
+        help="Include video size in the txt reports."
     )
     parser.add_argument(
         "-sb", "--sort-by",
@@ -597,7 +698,8 @@ def main():
                 txt_report_template,
                 failed_videos_data,
                 failed_videos_report_path,
-                timestamp
+                timestamp,
+                args.include_size_txt
             )
 
             print(f"\n{ui['yellow']}--- File Preview ---{ui['reset']}")
@@ -613,7 +715,7 @@ def main():
                 if report_format == 'all':
                     print(f"\n{ui['yellow']}Failed videos and error messages can be found here in csv, json:{ui['reset']}")
                     print(f"{ui['yellow']}-'FAILED' rows in CSV.{ui['reset']}")
-                    print(f"{ui['yellow']}-'failed_files' array in JSON.{ui['reset']}")
+                    print(f"{ui['yellow']}-'failed_videos' array in JSON.{ui['reset']}")
 
     except Exception as e:
         print(f"\n{ui['red']}ERROR: Could not save the file. Reason: {e}{ui['reset']}")
