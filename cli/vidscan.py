@@ -569,7 +569,7 @@ def main():
     )
     parser.add_argument(
         "-sb", "--sort-by",
-        choices=['name', 'duration', 'videos', 'date'],
+        choices=['name', 'duration', 'videos', 'size', 'date'],
         default='name',
         help="Sort folders by (default: name)."
     )
@@ -647,6 +647,7 @@ def main():
         'name': lambda item: os.path.basename(item[0]),
         'duration': lambda item: item[1]['total_seconds'],
         'videos': lambda item: item[1]['video_count'],
+        'size': lambda item: item[1]['total_size'],
         'date': lambda item: item[1]['last_modified']
     }[args.sort_by]
 
