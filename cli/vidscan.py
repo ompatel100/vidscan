@@ -165,10 +165,11 @@ def scan_videos_concurrently(root_folder: str, video_extensions: set, excluded_f
 
     last_print_time = 0.0
     update_interval = 0.1
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        future_to_video = {}
 
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=num_workers)
+    future_to_video = {}
+
+    try:
         for video_path, mtime, size in stream_video_files(root_folder, video_extensions, excluded_folders):
             future = executor.submit(get_video_duration, video_path, ffprobe_timeout)
             future_to_video[future] = (video_path, mtime, size)
@@ -217,6 +218,19 @@ def scan_videos_concurrently(root_folder: str, video_extensions: set, excluded_f
                         print(f"\rProgress: [{bar}] {percent}% ({videos_processed}/{total_videos})", end="", flush=True)
 
                     last_print_time = current_time
+
+    except KeyboardInterrupt:
+        print(f"\n\n{ui['yellow']}[!] Exiting gracefully{ui['reset']}")
+        print(f"{ui['cyan']}Cancelling and saving partial data...{ui['reset']}")
+
+    finally:
+        if sys.version_info >= (3, 9):
+            executor.shutdown(wait=False, cancel_futures=True)
+            
+        else:
+            for future in future_to_video:
+                future.cancel()
+            executor.shutdown(wait=False)
 
     print(f"\nProcessing complete in {time.time() - start_time:.2f} seconds.")
 
@@ -735,4 +749,8 @@ def main():
         print(f"\n{ui['red']}ERROR: Could not save the file. Reason: {e}{ui['reset']}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n[!] Interrupted by user")
+        sys.exit(130)
