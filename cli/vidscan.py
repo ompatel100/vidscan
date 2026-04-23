@@ -128,19 +128,27 @@ def format_bytes(size_bytes: int) -> str:
 
     return f"{size_units:.2f} {units[unit_idx]}"
 
-def stream_video_files(root_folder: str, video_extensions: set, excluded_folders: set) -> Iterator[Tuple[str, float, int]]:
+def stream_video_files(root_folder: str, video_extensions: set, excluded_folders: set) -> Iterator[Tuple[str, float, Any, str]]:
     stack = [root_folder]
     while stack:
         current_dir = stack.pop()
-        with os.scandir(current_dir) as entries:
-            for entry in entries:
-                if entry.is_dir(follow_symlinks=False):
-                    if entry.name not in excluded_folders:
-                        stack.append(entry.path)
-                elif entry.is_file(follow_symlinks=False):
-                    ext = os.path.splitext(entry.name)[1].lower()
-                    if ext in video_extensions:
-                        yield entry.path, entry.stat().st_mtime, entry.stat().st_size
+
+        try:
+            with os.scandir(current_dir) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name not in excluded_folders:
+                            stack.append(entry.path)
+                    
+                    elif entry.is_file(follow_symlinks=False):
+                        ext = os.path.splitext(entry.name)[1].lower()
+                        if ext in video_extensions:
+                            try:
+                                yield entry.path, entry.stat().st_mtime, entry.stat().st_size, ""
+                            except OSError as e:
+                                yield entry.path, 0.0, 0, f"OS Error: {str(e)}"
+        except OSError:
+            continue
 
 def scan_videos_concurrently(root_folder: str, video_extensions: set, excluded_folders: set, num_workers: int, ffprobe_timeout:float, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, List[Dict[str, Any]]]:
     folder_data: Dict[str, Any] = {}
@@ -170,7 +178,16 @@ def scan_videos_concurrently(root_folder: str, video_extensions: set, excluded_f
     future_to_video = {}
 
     try:
-        for video_path, mtime, size in stream_video_files(root_folder, video_extensions, excluded_folders):
+        for video_path, mtime, size, os_error_msg in stream_video_files(root_folder, video_extensions, excluded_folders):
+            
+            if os_error_msg:
+                failed_videos_data.append({
+                    'path': video_path, 
+                    'error': os_error_msg,
+                    'size': 0
+                })
+                continue
+                
             future = executor.submit(get_video_duration, video_path, ffprobe_timeout)
             future_to_video[future] = (video_path, mtime, size)
 
