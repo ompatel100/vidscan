@@ -554,6 +554,27 @@ def parse_w_flag(value: str) -> int:
         
         return DEFAULT_W
 
+def get_safe_path_if_windows(path: str) -> str:
+    if os.name != 'nt':
+        return os.path.abspath(path)
+
+    path = os.path.abspath(path)
+    
+    # Path is safe if < 250 (MAX_PATH)
+    if len(path) < 250:
+        return path
+
+    # Add prefix for long path
+    if not path.startswith('\\\\?\\'):
+        if path.startswith('\\\\'):
+            # Network/UNC path
+            path = f"\\\\?\\UNC\\{path[2:]}"
+        else:
+            # Local/Mapped Path
+            path = f"\\\\?\\{path}"
+            
+    return path
+
 def main():
     parser = argparse.ArgumentParser(
         description="A high performance tool to calculate total video duration across nested directories.",
@@ -650,17 +671,18 @@ def main():
         print(f"{ui['red']}ERROR: ffprobe was found, but failed to execute. {e}{ui['reset']}")
         sys.exit(1)
 
-    root_folder = args.folder_path
+    root_folder = get_safe_path_if_windows(args.folder_path)
+
+    if not os.path.isdir(root_folder):
+        print(f"{ui['red']}ERROR: The path '{root_folder}' is not a valid directory.{ui['reset']}")
+        sys.exit(1)
+
     excluded_folders = set(args.exclude)
 
     if args.extensions:
         video_extensions = {ext.lower() if ext.startswith('.') else f'.{ext.lower()}' for ext in args.extensions}
     else:
         video_extensions = DEFAULT_VIDEO_EXTENSIONS
-
-    if not os.path.isdir(root_folder):
-        print(f"{ui['red']}ERROR: The path '{root_folder}' is not a valid directory.{ui['reset']}")
-        sys.exit(1)
 
     print(f"Scanning folder: {ui['cyan']}{root_folder}{ui['reset']}")
     if excluded_folders:
