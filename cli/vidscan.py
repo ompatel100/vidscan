@@ -83,24 +83,29 @@ def enable_ansi_windows() -> bool:
     except Exception:
         return False
 
-def get_video_duration(video_path: str, ffprobe_timeout: float) -> Tuple[float, str]:
+def get_video_duration(video_path: str, ffprobe_timeout_sec: float) -> Tuple[float, str]:
     try:
         command = [
             FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", video_path
         ]
+        
+        run_kwargs = {
+            "capture_output": True,
+            "text": True,
+            "check": True,
+            "timeout": ffprobe_timeout_sec
+        }
 
-        result = subprocess.run(
-            command, 
-            capture_output=True, 
-            text=True, 
-            check=True, 
-            timeout=ffprobe_timeout
-        )
+        if os.name == 'nt':
+            run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+
+        result = subprocess.run(command, **run_kwargs)
+        
         return float(result.stdout), ""
         
     except subprocess.TimeoutExpired:
-        return 0.0, f"Process timed out after {ffprobe_timeout} seconds"
+        return 0.0, f"Process timed out after {ffprobe_timeout_sec} seconds"
     except subprocess.CalledProcessError as e:
         error_msg = e.stderr.strip() if e.stderr else "Corrupted or unreadable file"
         return 0.0, error_msg
@@ -150,7 +155,7 @@ def stream_video_files(root_folder: str, video_extensions: set, excluded_folders
         except OSError:
             continue
 
-def scan_videos_concurrently(root_folder: str, video_extensions: set, excluded_folders: set, num_workers: int, ffprobe_timeout:float, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, List[Dict[str, Any]]]:
+def scan_videos_concurrently(root_folder: str, video_extensions: set, excluded_folders: set, num_workers: int, ffprobe_timeout_sec:float, fast_start_mode:bool, ui: Dict[str, Any]) -> Tuple[Dict[str, Any], int, int, List[Dict[str, Any]]]:
     folder_data: Dict[str, Any] = {}
     total_videos = 0
 
@@ -188,7 +193,7 @@ def scan_videos_concurrently(root_folder: str, video_extensions: set, excluded_f
                 })
                 continue
                 
-            future = executor.submit(get_video_duration, video_path, ffprobe_timeout)
+            future = executor.submit(get_video_duration, video_path, ffprobe_timeout_sec)
             future_to_video[future] = (video_path, mtime, size)
 
         for future in concurrent.futures.as_completed(future_to_video):
