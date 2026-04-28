@@ -1,2 +1,7 @@
+.pypirc
+dist/
+build/
+*.egg-info/
+
 VidScan_Benchmark_Data/
 cli_benchmark.csv
