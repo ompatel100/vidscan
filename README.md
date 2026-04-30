@@ -19,3 +19,7 @@ See [cli/README.md](cli/README.md) for full documentation.
 [Live app](https://ompatel100.github.io/vidscan/)
 
 [Source](web/)
+
+## License
+
+MIT
